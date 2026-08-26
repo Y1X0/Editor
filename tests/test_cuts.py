@@ -98,12 +98,37 @@ def test_output_is_monotonic():
         assert x["end"] > x["start"]
 
 
-@pytest.mark.xfail(reason="عتبة الـ٤٥٪ بتنحسب لكل مقطع لحاله، فكلمة موزّعة "
-                          "٤٣٪/٢٩٪ بتنرمى رغم إنها ٧٢٪ حاضرة إجمالًا",
-                   strict=False)
 def test_word_split_across_two_kept_segments_survives():
+    """٤٣٪ + ٢٩٪ = ٧٢٪ حاضرة — لا لكل مقطع لحاله بتعدّي العتبة."""
     w = words(("مرحبا", 0.9, 1.6))
-    assert [x["word"] for x in remap_words(w, [(0.0, 1.2), (1.4, 2.0)])] == ["مرحبا"]
+    out = remap_words(w, [(0.0, 1.2), (1.4, 2.0)])
+    assert [x["word"] for x in out] == ["مرحبا"]      # مرة وحدة، مش مرتين
+
+
+def test_split_word_spans_the_join():
+    """النسختين بتندمجوا بإدخال واحد بيغطي الوصلة."""
+    w = words(("مرحبا", 0.9, 1.6))
+    out = remap_words(w, [(0.0, 1.2), (1.4, 2.0)])
+    assert out[0]["start"] == pytest.approx(0.9)
+    assert out[0]["end"] == pytest.approx(1.2 + 0.2)   # طول المقطع الأول + الجزء الثاني
+
+
+def test_cumulative_overlap_still_rejects_a_genuinely_absent_word():
+    """التراكم ما لازم يخلّي العتبة بلا معنى: ٢٠٪ إجمالي لازم تنرمى."""
+    w = words(("خافتة", 0.0, 1.0))
+    assert remap_words(w, [(0.0, 0.1), (0.9, 1.0)]) == []
+
+
+def test_threshold_boundary():
+    w = words(("حد", 0.0, 1.0))
+    assert remap_words(w, [(0.0, 0.45)], min_ratio=0.45) != []   # بالضبط عالعتبة
+    assert remap_words(w, [(0.0, 0.44)], min_ratio=0.45) == []
+
+
+def test_split_word_does_not_disturb_its_neighbours():
+    w = words(("قبل", 0.0, 0.4), ("مرحبا", 0.9, 1.6), ("بعد", 1.7, 2.0))
+    assert [x["word"] for x in remap_words(w, [(0.0, 1.2), (1.4, 2.1)])] == \
+           ["قبل", "مرحبا", "بعد"]
 
 
 @pytest.mark.parametrize("gap", [0.02, 0.001, 0.0])

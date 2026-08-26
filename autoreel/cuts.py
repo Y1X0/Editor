@@ -38,21 +38,28 @@ def segments_from_words(words, duration, min_gap=0.45, pad=0.10, min_seg=0.35):
     return merged or [(0.0, duration)]
 
 
-def remap_words(words, segs):
+def remap_words(words, segs, min_ratio=0.45):
     """
     بعد القص بتتغير التوقيتات. هاي بترجّع الكلمات بتوقيت الفيديو الجديد،
     وبتشيل الكلمات اللي وقعت جوا الأجزاء المحذوفة.
+
+    `min_ratio`: أقل نسبة من مدة الكلمة لازم تنجى من القص حتى تضل.
+    بتنحسب **تراكميًا عبر كل المقاطع**، مش لكل مقطع لحاله.
     """
+    # تمريرة أولى للمجموع. القياس لكل مقطع لحاله كان بيرمي كلمة موزّعة
+    # ٤٣٪/٢٩٪ على مقطعين رغم إنها ٧٢٪ حاضرة — وهي بالضبط حالة الكلمة
+    # اللي على حد القص اللي العتبة موجودة عشان تحميها.
+    kept = []
+    for w in words:
+        ov = sum(max(0.0, min(w["end"], b) - max(w["start"], a)) for a, b in segs)
+        kept.append(ov / max(1e-6, w["end"] - w["start"]) >= min_ratio)
+
     out, offset, prev_i = [], 0.0, None
     for a, b in segs:
         for i, w in enumerate(words):
             # تداخل جزئي كافي — مش شرط الكلمة تكون كاملة جوا المقطع،
             # وإلا بتضيع الكلمات اللي على حدود القص.
-            ov = min(w["end"], b) - max(w["start"], a)
-            if ov <= 0:
-                continue
-            dur_w = max(1e-6, w["end"] - w["start"])
-            if ov / dur_w < 0.45:      # ظهور ضعيف جدًا -> تجاهل
+            if not kept[i] or min(w["end"], b) - max(w["start"], a) <= 0:
                 continue
             s = max(w["start"], a) - a + offset
             e = min(w["end"], b) - a + offset
