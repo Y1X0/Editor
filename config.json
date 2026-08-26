@@ -1,0 +1,49 @@
+{
+  "language": "ar",
+  "whisper_model": "small",
+  "output": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 30,
+    "crf": 19
+  },
+  "cuts": {
+    "min_gap": 0.45,
+    "pad": 0.1,
+    "min_seg": 0.35
+  },
+  "motion": {
+    "enabled": true,
+    "zoom_cycle": [
+      1.0,
+      1.1,
+      1.04,
+      1.14
+    ],
+    "pan_px": 26
+  },
+  "captions": {
+    "enabled": true,
+    "font": "fonts/Tajawal-ExtraBold.ttf",
+    "size": 74,
+    "max_words": 4,
+    "color": [
+      255,
+      255,
+      255
+    ],
+    "highlight": [
+      255,
+      92,
+      58
+    ],
+    "box": [
+      18,
+      18,
+      18,
+      215
+    ],
+    "y_ratio": 0.76,
+    "stroke": 0
+  }
+}
