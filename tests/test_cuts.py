@@ -106,9 +106,20 @@ def test_word_split_across_two_kept_segments_survives():
     assert [x["word"] for x in remap_words(w, [(0.0, 1.2), (1.4, 2.0)])] == ["مرحبا"]
 
 
-@pytest.mark.xfail(reason="منع التكرار بيقارن النص بس بدون تمييز حدود المقاطع، "
-                          "فكلمتين حقيقيتين متطابقتين بتنصهروا",
-                   strict=False)
-def test_genuinely_repeated_word_is_not_merged():
-    w = words(("لا", 1.00, 1.20), ("لا", 1.22, 1.42), ("صحيح", 1.5, 2.0))
+@pytest.mark.parametrize("gap", [0.02, 0.001, 0.0])
+def test_genuinely_repeated_word_is_not_merged(gap):
+    """«لا لا» و«يلا يلا» شائعة بالمحكي — الفاصل الزمني ما بيميّزهن."""
+    w = words(("لا", 1.00, 1.20), ("لا", 1.20 + gap, 1.40 + gap), ("صحيح", 1.5, 2.0))
     assert [x["word"] for x in remap_words(w, [(0.0, 3.0)])] == ["لا", "لا", "صحيح"]
+
+
+def test_repeated_word_keeps_its_own_timing():
+    w = words(("لا", 1.00, 1.20), ("لا", 1.22, 1.42))
+    out = remap_words(w, [(0.0, 3.0)])
+    assert [(x["start"], x["end"]) for x in out] == [
+        pytest.approx((1.00, 1.20)), pytest.approx((1.22, 1.42))]
+
+
+def test_three_identical_words_all_survive():
+    w = words(("لا", 0.1, 0.3), ("لا", 0.32, 0.52), ("لا", 0.54, 0.74))
+    assert len(remap_words(w, [(0.0, 2.0)])) == 3

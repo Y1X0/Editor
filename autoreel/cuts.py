@@ -43,9 +43,9 @@ def remap_words(words, segs):
     بعد القص بتتغير التوقيتات. هاي بترجّع الكلمات بتوقيت الفيديو الجديد،
     وبتشيل الكلمات اللي وقعت جوا الأجزاء المحذوفة.
     """
-    out, offset = [], 0.0
+    out, offset, prev_i = [], 0.0, None
     for a, b in segs:
-        for w in words:
+        for i, w in enumerate(words):
             # تداخل جزئي كافي — مش شرط الكلمة تكون كاملة جوا المقطع،
             # وإلا بتضيع الكلمات اللي على حدود القص.
             ov = min(w["end"], b) - max(w["start"], a)
@@ -56,10 +56,18 @@ def remap_words(words, segs):
                 continue
             s = max(w["start"], a) - a + offset
             e = min(w["end"], b) - a + offset
-            if out and w["word"] == out[-1]["word"] and s - out[-1]["end"] < 0.05:
-                out[-1]["end"] = e     # لا تكرر كلمة انقسمت بين مقطعين
+            # نفس الكلمة المصدرية انقسمت بين مقطعين -> مدّدها بدل ما
+            # تكرّرها. المقارنة بالفهرس مش بالنص: «لا لا» كلمتين
+            # حقيقيتين، والمقارنة النصية كانت بتصهرهن بوحدة.
+            #
+            # الفهرس كافي لحاله: الكلمة الواحدة بتنبعث مرة لكل مقطع،
+            # والمقاطع مرتّبة، فتكرار الفهرس ورا بعض معناه حدود قص
+            # بالضبط — ما بصير جوا نفس المقطع.
+            if out and prev_i == i:
+                out[-1]["end"] = e
             else:
                 out.append({"word": w["word"], "start": s, "end": e})
+            prev_i = i
         offset += (b - a)
     return out
 
