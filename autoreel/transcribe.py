@@ -20,21 +20,43 @@ def transcribe(path, model_size="small", language="ar", cache=None):
     return words
 
 
+_TS = None
+
+
 def from_srt(path):
-    """بديل: لو عندك ملف SRT جاهز بدل ما تشغّل Whisper."""
+    """
+    بديل: لو عندك ملف SRT جاهز بدل ما تشغّل Whisper.
+
+    بنقسّم على السطر الفاضي **قبل** ما نقرا أي كتلة، بدل regex وحدة
+    بتمتد عبر الملف كله. الشكل القديم كان بيعتمد على `(?=\\n\\n|\\Z)`
+    لتحديد نهاية النص، فكتلة نصها فاضي بتبلع سطر الرقم وسطر التوقيت
+    للكتلة الجاية ويصيروا "كلمات" (`2`, `00:00:02,000`, `-->`) —
+    بيدخلوا بالكابشن وبخطة القص كمان.
+    """
     import re
+    global _TS
+    if _TS is None:
+        _TS = re.compile(r"(\d+):(\d+):(\d+)[,.](\d+)\s*-->\s*"
+                         r"(\d+):(\d+):(\d+)[,.](\d+)")
+
     txt = open(path, encoding="utf-8").read()
     out = []
-    for m in re.finditer(
-        r"(\d+):(\d+):(\d+)[,.](\d+)\s*-->\s*(\d+):(\d+):(\d+)[,.](\d+)\s*\n(.+?)(?=\n\n|\Z)",
-        txt, re.S):
+    for block in re.split(r"\n[ \t]*\n", txt):
+        lines = block.splitlines()
+        m = i = None
+        for i, ln in enumerate(lines):
+            m = _TS.search(ln)
+            if m:
+                break
+        if not m:
+            continue                      # كتلة بلا سطر توقيت — تجاهلها
         g = m.groups()
-        s = int(g[0])*3600+int(g[1])*60+int(g[2])+int(g[3])/1000
-        e = int(g[4])*3600+int(g[5])*60+int(g[6])+int(g[7])/1000
-        ws = g[8].replace("\n", " ").split()
-        if not ws:
-            continue
+        s = int(g[0])*3600 + int(g[1])*60 + int(g[2]) + int(g[3])/1000
+        e = int(g[4])*3600 + int(g[5])*60 + int(g[6]) + int(g[7])/1000
+        ws = " ".join(lines[i+1:]).split()
+        if not ws or e <= s:
+            continue                      # بلا نص أو مدة غير صالحة
         step = (e - s) / len(ws)
-        for i, w in enumerate(ws):
-            out.append({"word": w, "start": s+i*step, "end": s+(i+1)*step})
+        for j, w in enumerate(ws):
+            out.append({"word": w, "start": s+j*step, "end": s+(j+1)*step})
     return out

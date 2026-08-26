@@ -54,12 +54,29 @@ def test_multiline_caption_is_joined(tmp_path):
            ["سطر", "أول", "سطر", "تاني"]
 
 
-@pytest.mark.xfail(reason="كتلة نصها فاضي: `\\s*\\n` بالregex بتبلع سطر الرقم "
-                          "وسطر التوقيت للكتلة الجاية فبيصيروا كلمات كابشن، "
-                          "وبيدخلوا بخطة القص كمان",
-                   strict=False)
-def test_blocks_with_no_text_are_skipped(tmp_path):
-    src = "1\n00:00:00,000 --> 00:00:01,000\n   \n\n2\n00:00:02,000 --> 00:00:03,000\nآه\n"
+@pytest.mark.parametrize("blank", ["   ", "", "\t"])
+def test_blocks_with_no_text_are_skipped(tmp_path, blank):
+    """الكتلة الفاضية ما لازم تبلع سطر الرقم والتوقيت للكتلة اللي بعدها."""
+    src = (f"1\n00:00:00,000 --> 00:00:01,000\n{blank}\n\n"
+           "2\n00:00:02,000 --> 00:00:03,000\nآه\n")
+    assert [w["word"] for w in from_srt(write(tmp_path, src))] == ["آه"]
+
+
+def test_timestamps_never_leak_into_words(tmp_path):
+    """أوضح عرَض للباگ القديم: `-->` بتطلع ككلمة كابشن."""
+    src = ("1\n00:00:00,000 --> 00:00:01,000\n\n\n"
+           "2\n00:00:02,000 --> 00:00:03,000\nنعم\n")
+    got = [w["word"] for w in from_srt(write(tmp_path, src))]
+    assert "-->" not in got and not any(":" in w for w in got)
+
+
+def test_block_with_reversed_times_is_skipped(tmp_path):
+    src = "1\n00:00:05,000 --> 00:00:02,000\nمقلوب\n"
+    assert from_srt(write(tmp_path, src)) == []
+
+
+def test_trailing_blank_lines_do_not_add_words(tmp_path):
+    src = "1\n00:00:00,000 --> 00:00:01,000\nآه\n\n\n\n"
     assert [w["word"] for w in from_srt(write(tmp_path, src))] == ["آه"]
 
 
