@@ -2,14 +2,30 @@
 import subprocess, os, shlex
 
 
-def run(cmd, quiet=True):
+def preview(cmd):
+    """الأمر كنص جاهز للصق بالترمنال."""
+    return " ".join(shlex.quote(c) for c in cmd)
+
+
+def run(cmd, quiet=True, dry_run=False):
+    """
+    ينفّذ أمر ffmpeg.
+
+    `dry_run=True` بيطبع الأمر وبيرجع بدون تنفيذ. باقي المنطق —
+    خطة القص، الهندسة، رسم الكابشن، أسماء الملفات — بيشتغل عادي،
+    فالمطبوع هو الأمر الحقيقي مش تقريب إله. هيك بتنفحص طبقة الفيديو
+    من طرف لطرف بلا ffmpeg.
+    """
+    if dry_run:
+        print("$ " + preview(cmd))
+        return None
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
-        raise RuntimeError(f"ffmpeg فشل:\n{' '.join(shlex.quote(c) for c in cmd[:12])}...\n{r.stderr[-1800:]}")
+        raise RuntimeError(f"ffmpeg فشل:\n{preview(cmd[:12])}...\n{r.stderr[-1800:]}")
     return r
 
 
-def build_base(src, segs, cfg, workdir):
+def build_base(src, segs, cfg, workdir, dry_run=False):
     """
     يقص المقاطع، يطبّق زوم مختلف لكل مقطع (punch-in)، ويلزقهم.
     الزوم ثابت داخل المقطع — هيك بيطلع الشكل المعروف بالريلز.
@@ -33,7 +49,7 @@ def build_base(src, segs, cfg, workdir):
              "-vf", vf, "-c:v", "libx264", "-crf", str(cfg["output"]["crf"]),
              "-preset", "veryfast", "-pix_fmt", "yuv420p",
              "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2",
-             "-avoid_negative_ts", "make_zero", out])
+             "-avoid_negative_ts", "make_zero", out], dry_run=dry_run)
         parts.append(out)
 
     lst = os.path.join(workdir, "concat.txt")
@@ -42,11 +58,11 @@ def build_base(src, segs, cfg, workdir):
             f.write(f"file '{os.path.abspath(p)}'\n")
     base = os.path.join(workdir, "base.mp4")
     run(["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0",
-         "-i", lst, "-c", "copy", base])
+         "-i", lst, "-c", "copy", base], dry_run=dry_run)
     return base
 
 
-def burn_captions(base, caps, cfg, out_path, batch=60, workdir=None):
+def burn_captions(base, caps, cfg, out_path, batch=60, workdir=None, dry_run=False):
     """
     يحرق الكابشن على دفعات — تجنّبًا لسلسلة overlay طويلة بتكسر ffmpeg
     أو بتاكل الذاكرة على الموبايل.
@@ -59,7 +75,7 @@ def burn_captions(base, caps, cfg, out_path, batch=60, workdir=None):
     """
     if not caps:
         run(["ffmpeg", "-y", "-loglevel", "error", "-i", base,
-             "-c", "copy", out_path])
+             "-c", "copy", out_path], dry_run=dry_run)
         return out_path
 
     H = cfg["output"]["height"]
@@ -85,10 +101,10 @@ def burn_captions(base, caps, cfg, out_path, batch=60, workdir=None):
                 "-map", "0:a?", "-c:v", "libx264", "-crf", str(cfg["output"]["crf"]),
                 "-preset", "veryfast", "-pix_fmt", "yuv420p",
                 "-c:a", "copy", "-movflags", "+faststart", nxt]
-        run(cmd)
+        run(cmd, dry_run=dry_run)
         # التمريرة السابقة انقرأت خلص. كل واحدة فيديو كامل، فتركهن
         # بيضاعف استهلاك القرص مع كل دفعة.
-        if stale:
+        if stale and not dry_run:
             try:
                 os.remove(stale)
             except OSError:

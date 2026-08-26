@@ -25,6 +25,7 @@ python -c "from PIL import features; print('raqm:', features.check('raqm'))"
 python -m autoreel.cli raw.mp4 -o reel.mp4
 python -m autoreel.cli raw.mp4 --srt subs.srt -o reel.mp4    # بدون Whisper
 python -m autoreel.cli raw.mp4 --no-cut --no-motion -o reel.mp4
+python -m autoreel.cli raw.mp4 --dry-run -o reel.mp4          # اطبع أوامر ffmpeg بس
 ```
 
 أول تشغيل بينزّل موديل Whisper (~٥٠٠MB للـ small). التفريغ بينحفظ بملف

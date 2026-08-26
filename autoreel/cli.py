@@ -13,6 +13,8 @@ def main():
     ap.add_argument("--no-cut", action="store_true", help="لا تشيل الصمت")
     ap.add_argument("--no-motion", action="store_true")
     ap.add_argument("--keep", action="store_true", help="خلّي الملفات المؤقتة")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="اطبع أوامر ffmpeg بدون ما تشغّلها")
     a = ap.parse_args()
 
     cfg = json.load(open(a.config, encoding="utf-8"))
@@ -45,7 +47,7 @@ def main():
         print(f"[3/5] {len(segs)} مقطع · بعد القص {new_dur:.1f}s "
               f"(انشال {dur-new_dur:.1f}s)")
 
-        base = R.build_base(a.input, segs, cfg, work)
+        base = R.build_base(a.input, segs, cfg, work, dry_run=a.dry_run)
         print("[4/5] القص والزوم خلصوا")
 
         caps = []
@@ -59,8 +61,12 @@ def main():
                                           bridge_gap=cfg["cuts"]["min_gap"])
             print(f"[5/5] {len(groups)} كابشن ({len(caps)} إطار)")
 
-        R.burn_captions(base, caps, cfg, a.output, workdir=work)
-        print(f"\n✅ {a.output}  ({new_dur:.1f}s)")
+        R.burn_captions(base, caps, cfg, a.output, workdir=work, dry_run=a.dry_run)
+        if a.dry_run:
+            print(f"\n🔍 تجربة جافة — ما انكتب ولا ملف. الهدف كان {a.output}"
+                  f"  ({new_dur:.1f}s)")
+        else:
+            print(f"\n✅ {a.output}  ({new_dur:.1f}s)")
     finally:
         if a.keep:
             print("temp:", work)
