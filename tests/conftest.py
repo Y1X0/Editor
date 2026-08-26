@@ -42,7 +42,7 @@ def _clear_caches():
     """كاش الملاءمة عالمي — لا تخلّي اختبار يلوّث اللي بعده."""
     try:
         from autoreel import captions as CAP
-        CAP._FIT_CACHE.clear()
+        CAP._LAYOUT_CACHE.clear()
     except Exception:
         pass
     yield

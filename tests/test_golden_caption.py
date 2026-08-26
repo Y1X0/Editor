@@ -28,12 +28,17 @@ W = 1080
 REGEN = os.environ.get("AUTOREEL_REGEN_GOLDEN") == "1"
 MAX_DIFF = 0.02          # نسبة البكسلات المسموح تختلف
 
+# (نص، فهرس التلوين، اسم التصدير) — التصدير None يعني جذر الconfig
 CASES = {
-    "one_line": ("وبيحط كابشن عربي بالاتجاه", None),
-    "two_lines": ("الاستراتيجية المسؤوليات الاستثمارات المشروعات", None),
-    "highlight_first": ("واحد اثنين ثلاثة", 0),
-    "highlight_last": ("واحد اثنين ثلاثة", 2),
-    "shrunk": ("المسؤوليات الاستراتيجية والاستثمارات الاجتماعية بالمستشفيات", None),
+    "one_line": ("وبيحط كابشن عربي بالاتجاه", None, None),
+    "two_lines": ("الاستراتيجية المسؤوليات الاستثمارات المشروعات", None, None),
+    "highlight_first": ("واحد اثنين ثلاثة", 0, None),
+    "highlight_last": ("واحد اثنين ثلاثة", 2, None),
+    "shrunk": ("المسؤوليات الاستراتيجية والاستثمارات الاجتماعية بالمستشفيات", None, None),
+    # مقاس لكل تصدير: نفس النص بإعدادات وعرض مختلفين
+    "size_reel": ("وبيحط كابشن عربي بالاتجاه", 1, "reel"),
+    "size_square": ("وبيحط كابشن عربي بالاتجاه", 1, "square"),
+    "size_wide": ("وبيحط كابشن عربي بالاتجاه", 1, "wide"),
 }
 
 
@@ -55,14 +60,28 @@ def _diff_ratio(a, b):
     return off / (d.width * d.height)
 
 
+def case_config(caps, export):
+    """إعدادات الكابشن وعرض الإطار للحالة — من التصدير أو من الجذر."""
+    if export is None:
+        return caps, W
+    import json
+    from autoreel import exports as X
+    from conftest import ROOT
+    root = json.loads((ROOT / "config.json").read_text(encoding="utf-8"))
+    root["captions"]["font"] = caps["font"]          # مسار مطلق من الfixture
+    c = X.resolve(root, export)
+    return c["captions"], c["output"]["width"]
+
+
 @needs_raqm
 @pytest.mark.golden
 @pytest.mark.parametrize("name", sorted(CASES))
 def test_caption_matches_golden(caps, name, tmp_path):
     from PIL import Image
 
-    text, hl = CASES[name]
-    got = CAP.render_caption(text, caps, W, highlight_idx=hl)
+    text, hl, export = CASES[name]
+    ccfg, cw = case_config(caps, export)
+    got = CAP.render_caption(text, ccfg, cw, highlight_idx=hl)
     ref = GOLDEN / f"{name}.png"
 
     if REGEN or not ref.exists():

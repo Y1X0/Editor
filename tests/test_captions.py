@@ -208,12 +208,14 @@ def test_each_karaoke_frame_differs(caps):
 def test_fit_cache_key_covers_size_and_width(caps):
     """الكاش لازم يميّز الحجم والعرض، وإلا تغيير الconfig بيرجّع نتيجة قديمة."""
     text = "الاستراتيجية المسؤوليات الاستثمارات المشروعات"
-    warm = CAP._fit(text.split(), caps["font"], caps["size"], W - 60)
+    warm = CAP._fit(text.split(), caps["font"], caps["size"],
+                    CAP.available_width(W))
     CAP.render_caption(text, caps, W)
     CAP.render_caption(text, dict(caps, size=40), W)
     CAP.render_caption(text, caps, 1440)
-    assert CAP._FIT_CACHE[(text, caps["font"], caps["size"], W)] == warm
-    assert len(CAP._FIT_CACHE) == 3
+    lay = CAP._LAYOUT_CACHE[(text, caps["font"], caps["size"], W)]
+    assert (lay["size"], lay["lines"]) == warm
+    assert len(CAP._LAYOUT_CACHE) == 3
 
 
 @needs_raqm

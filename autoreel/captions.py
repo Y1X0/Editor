@@ -67,7 +67,7 @@ _HARD_MIN = 0.45     # أصغر حجم مسموح فيه إطلاقًا قبل �
 _SMALL_WARN = 55     # تحت هيك النص كامل بس ما بينقرا على الموبايل
 _MAX_LINES = 2
 
-_FIT_CACHE = {}
+_LAYOUT_CACHE = {}
 
 
 def _margins(size):
@@ -139,6 +139,98 @@ def _fit(words, font_path, base_size, avail_outer):
     return hard, lines or [words]
 
 
+def available_width(W):
+    """
+    العرض المتاح للكابشن داخل إطار عرضه W.
+
+    نسبة مش رقم ثابت: `W - 60` كان يعطي هامش ٥.٦٪ على ١٠٨٠، وعلى
+    ١٩٢٠ بيصير ٣.١٪ يعني هامش تافه. `W/18` بيعطي ٦٠ **بالضبط** عند
+    ١٠٨٠ فالصور المرجعية ما بتتأثر، وبيتوسّع صح لباقي المقاسات.
+    """
+    return W - round(W / 18)
+
+
+def _layout(text, cfg, W):
+    """
+    كل هندسة الكابشن بدون رسم — المصدر الوحيد للأبعاد.
+
+    `render_caption` بترسم منها، و`caption_size` بتقرا المقاس منها،
+    فما بتنفرق حسبة الارتفاع عن الرسم الفعلي.
+    """
+    key = (text, cfg["font"], cfg["size"], W)
+    if key in _LAYOUT_CACHE:
+        return _LAYOUT_CACHE[key]
+
+    words = text.split()
+    size, lines = _fit(words, cfg["font"], cfg["size"], available_width(W))
+    # شرط التصغير الفعلي مقصود: `captions.size` بينداهس لكل مقاس (٤٤
+    # للمربع والعريض)، فبدونه كان التحذير بيطلع «انصغّر لحجم ٤٤ (الأصلي
+    # ٤٤)» على كل كابشن بهدول المقاسين. التحذير عن تصغير **غير متوقّع**،
+    # مش عن حجم اخترته أنت.
+    if size < cfg["size"] and size < _SMALL_WARN:
+        print(f"⚠️  الكابشن انصغّر من {cfg['size']} لـ{size} — كامل بس صعب "
+              f"يتقرا على الموبايل: «{text}»\n"
+              f"    جرّب تصغير captions.max_words أو captions.size.",
+              file=sys.stderr)
+
+    f = _font(cfg["font"], size)
+    pad_x, pad_y, gap = _margins(size)
+
+    # ارتفاع السطر من bbox النص الكامل — بيثبّت خط الأساس لكل الأسطر
+    # ولكل إطارات الكاريوكي لنفس الجملة.
+    bb = _MEASURE.textbbox((0, 0), text, font=f, direction="rtl", language="ar")
+    th, top = bb[3] - bb[1], bb[1]
+    leading = int(size * 0.22)
+
+    per_line = [_widths(ln, f) for ln in lines]
+    totals = [sum(w for w, _ in ws) + gap * (len(ws) - 1) for ws in per_line]
+
+    lay = {
+        "size": size, "lines": lines, "font": f, "per_line": per_line,
+        "totals": totals, "gap": gap, "pad_y": pad_y, "th": th, "top": top,
+        "leading": leading,
+        "w": max(totals) + pad_x * 2,
+        "h": th * len(lines) + leading * (len(lines) - 1) + pad_y * 2,
+    }
+    _LAYOUT_CACHE[key] = lay
+    return lay
+
+
+def caption_size(text, cfg, W):
+    """مقاس الكابشن (عرض، ارتفاع) بدون ما نرسمه."""
+    _require_raqm()
+    if not text.split():
+        return (1, 1)
+    lay = _layout(text, cfg, W)
+    return lay["w"], lay["h"]
+
+
+def assert_fits_frame(texts, cfg, W, H, label=""):
+    """
+    بيرفع لو أطول كابشن بيطلع برّا الإطار عند `y_ratio` المعطاة.
+
+    خطأ مش تحذير: كابشن مقصوص مخرَج تالف، والمستخدم بيكتشفه بعد الرفع
+    مش قبله. الحجم الصغير بيضل تحذير — هاداك مقروئية مش تلف.
+    """
+    y = int(H * cfg["y_ratio"])
+    worst, tallest = None, 0
+    for t in texts:
+        h = caption_size(t, cfg, W)[1]
+        if h > tallest:
+            worst, tallest = t, h
+    if worst is None:
+        return
+    top, bot = y - tallest // 2, y - tallest // 2 + tallest
+    if top < 0 or bot > H:
+        where = f"[{label}] " if label else ""
+        raise ValueError(
+            f"{where}الكابشن بيطلع برّا الإطار: ارتفاعه {tallest}px بمركز "
+            f"y={y}، فبيمتد {top}..{bot} والإطار {H}px.\n"
+            f"    أطول كابشن: «{worst}»\n"
+            f"    صغّر captions.size أو captions.max_words، أو حرّك "
+            f"captions.y_ratio (حاليًا {cfg['y_ratio']}).")
+
+
 def render_caption(text, cfg, W, highlight_idx=None):
     """
     يرجّع PNG شفاف فيه الكابشن مع خلفية مدوّرة.
@@ -147,35 +239,15 @@ def render_caption(text, cfg, W, highlight_idx=None):
     شوف `_fit` لترتيب المحاولات.
     """
     _require_raqm()
-    words = text.split()
-    if not words:
+    if not text.split():
         return Image.new("RGBA", (1, 1), (0, 0, 0, 0))
 
-    key = (text, cfg["font"], cfg["size"], W)
-    if key not in _FIT_CACHE:                # نفس الجملة بتنرسم مرة لكل كلمة
-        _FIT_CACHE[key] = _fit(words, cfg["font"], cfg["size"], W - 60)
-        sz = _FIT_CACHE[key][0]
-        if sz < _SMALL_WARN:                 # مرة وحدة للجملة، مش لكل إطار
-            print(f"⚠️  الكابشن انصغّر لحجم {sz} (الأصلي {cfg['size']}) — كامل بس "
-                  f"صعب يتقرا على الموبايل: «{text}»\n"
-                  f"    جرّب تصغير captions.max_words أو captions.size.",
-                  file=sys.stderr)
-    size, lines = _FIT_CACHE[key]
+    lay = _layout(text, cfg, W)
+    f, gap, pad_y = lay["font"], lay["gap"], lay["pad_y"]
+    th, top, leading = lay["th"], lay["top"], lay["leading"]
+    lines, per_line, totals = lay["lines"], lay["per_line"], lay["totals"]
 
-    f = _font(cfg["font"], size)
-    pad_x, pad_y, gap = _margins(size)
-
-    # ارتفاع السطر من bbox النص الكامل — بيثبّت خط الأساس لكل الأسطر
-    # ولكل إطارات الكاريوكي لنفس الجملة.
-    bb_full = _MEASURE.textbbox((0, 0), text, font=f, direction="rtl", language="ar")
-    th, top = bb_full[3] - bb_full[1], bb_full[1]
-    leading = int(size * 0.22)
-
-    per_line = [_widths(ln, f) for ln in lines]
-    totals = [sum(w for w, _ in ws) + gap * (len(ws) - 1) for ws in per_line]
-
-    img_w = max(totals) + pad_x * 2
-    img_h = th * len(lines) + leading * (len(lines) - 1) + pad_y * 2
+    img_w, img_h = lay["w"], lay["h"]
     img = Image.new("RGBA", (img_w, img_h), (0, 0, 0, 0))
     dr = ImageDraw.Draw(img)
     dr.rounded_rectangle([0, 0, img_w - 1, img_h - 1],
