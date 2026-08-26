@@ -39,6 +39,12 @@ CASES = {
     "size_reel": ("وبيحط كابشن عربي بالاتجاه", 1, "reel"),
     "size_square": ("وبيحط كابشن عربي بالاتجاه", 1, "square"),
     "size_wide": ("وبيحط كابشن عربي بالاتجاه", 1, "wide"),
+    # نص مختلط: هون بيتمسك انقلاب الـrun اللاتيني بالشكل مش بالأرقام
+    "mixed_latin_run": ("حمّل من App Store هلأ", 2, None),
+    "mixed_single_latin": ("شغال على Flutter من ٢٠٢٤", 2, None),
+    "mixed_neutral_joins": ("تحديث iOS 18 نزل", 1, None),
+    "mixed_arabic_between": ("افتح Google ثم Play Store", 3, None),
+    "mixed_all_latin": ("Flutter Web and Dart", 1, None),
 }
 
 

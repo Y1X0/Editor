@@ -245,3 +245,168 @@ def test_comparator_rejects_the_old_broken_order(caps, text):
     pure_rtl = visual_widths(tokens, list(reversed(range(len(tokens)))), caps, 74)
     assert matches(good, ref)
     assert not matches(pure_rtl, ref), "المقارنة ما فرّقت الجديد عن المكسور"
+
+
+# ================= حلقة الرسم: الترتيب البصري والتلوين =================
+#
+# ⚠️ الفرق بين الاسمين هو مصدر الباگات هون:
+#   logical_index  = مكان التوكن بالنص (اللي `highlight_idx` بيشير إله)
+#   draw_position  = مكان رسمه على الصورة من اليسار لليمين
+# بالنص العربي الخالص هدول معكوس بعض، وبالمختلط لا هيك ولا هيك.
+
+def highlight_centre(text, caps, logical_index):
+    """مركز الكتلة الملوّنة أفقيًا — يعني وين انرسم التوكن فعليًا."""
+    bare = dict(caps, box=[0, 0, 0, 0], color=[255, 255, 255])
+    img = CAP.render_caption(text, bare, 1080,
+                             highlight_idx=logical_index).convert("RGB")
+    px = img.load()
+    r, g, b = caps["highlight"]
+    xs = [x for y in range(img.height) for x in range(img.width)
+          if abs(px[x, y][0] - r) < 40 and abs(px[x, y][1] - g) < 40
+          and abs(px[x, y][2] - b) < 40]
+    assert xs, f"ما في بكسلات ملوّنة للفهرس المنطقي {logical_index}"
+    return sum(xs) / len(xs)
+
+
+@needs_raqm
+@pytest.mark.parametrize("text", CASES)
+def test_draw_order_follows_bidi_runs(caps, text):
+    """
+    الفحص المركزي: لوّن كل توكن بدوره وسجّل مركزه، وبعدين رتّب الفهارس
+    المنطقية حسب المركز من اليسار لليمين. الناتج لازم يساوي
+    `_bidi_runs` بالضبط.
+
+    هيك بيتفحص الاتنين بتأكيد واحد: إن `highlight_idx` بيشير للتوكن
+    الصح (فهرس منطقي)، وإن الترتيب البصري صحيح.
+    """
+    tokens = text.split()
+    centres = {i: highlight_centre(text, caps, i) for i in range(len(tokens))}
+    by_position = sorted(centres, key=centres.get)
+    assert by_position == CAP._bidi_runs(tokens), (
+        f"ترتيب الرسم غلط\n"
+        f"    انرسم:  {[tokens[i] for i in by_position]}\n"
+        f"    المتوقع: {[tokens[i] for i in CAP._bidi_runs(tokens)]}")
+
+
+@needs_raqm
+def test_adjacent_latin_run_reads_left_to_right(caps):
+    """أوضح صياغة للباگ: App لازم تكون على يسار Store، مش يمينها."""
+    text = "حمّل من App Store هلأ"
+    app, store = text.split().index("App"), text.split().index("Store")
+    assert highlight_centre(text, caps, app) < highlight_centre(text, caps, store)
+
+
+@needs_raqm
+def test_pure_arabic_still_reads_right_to_left(caps):
+    """التصليح ما لازم يقلب العربي الخالص."""
+    text = "هاد المشروع بيقص الفيديو"
+    cs = [highlight_centre(text, caps, i) for i in range(4)]
+    assert cs[0] > cs[1] > cs[2] > cs[3]
+
+
+# ------------------------- الحد الموثّق: run بينقسم على سطرين
+
+MULTILINE = "المنصة بتشتغل على App Store Connect Developer Portal بشكل كامل"
+
+
+@needs_raqm
+def test_latin_run_split_across_lines_is_ordered_per_line(caps):
+    """
+    حد موثّق بـCLAUDE.md، وهون اختبار صريح إله بدل ما يضل كلام:
+    الـrun اللي بينقسم على سطرين بينرتّب **داخل كل سطر لحاله**.
+
+    مش UAX#9 كامل — المواصفة بتعامل الـrun كوحدة عبر اللف. بس النتيجة
+    مقبولة عمليًا: كل سطر بيقرا صح لحاله.
+    """
+    lay = CAP._layout(MULTILINE, caps, 1080)
+    assert len(lay["lines"]) == 2, "الحالة لازم تلف سطرين"
+
+    latin = [w for w in MULTILINE.split() if CAP._token_dir(w) == "L"]
+    split = [w for w in lay["lines"][0] if w in latin] and \
+            [w for w in lay["lines"][1] if w in latin]
+    assert split, "الـrun اللاتيني لازم ينقسم على السطرين"
+
+    # كل سطر مرتّب داخليًا حسب bidi تبعه
+    for line in lay["lines"]:
+        order = CAP._bidi_runs(line)
+        assert sorted(order) == list(range(len(line)))
+
+
+@needs_raqm
+def test_multiline_mixed_text_is_not_clipped(caps):
+    """الحد ما لازم يجيب معه قصّ — هاد بند ١ وما بينتنازل عنه."""
+    bare = dict(caps, box=[0, 0, 0, 0])
+    img = CAP.render_caption(MULTILINE, caps, 1080)
+    bb = CAP.render_caption(MULTILINE, bare, 1080).split()[-1].getbbox()
+    assert img.width <= 1080 - 60
+    assert bb[0] > 0 and bb[2] < img.width
+
+
+# --------------------------- شرط ٢: التقسيم ما بيغيّر حساب العرض
+
+@needs_raqm
+@pytest.mark.parametrize("text", CASES + [MULTILINE])
+def test_layout_width_is_independent_of_ordering(caps, text):
+    """
+    `_fit` بتحسب العرض من مجموع الكلمات + الفجوات. الترتيب تبديل، يعني
+    المجموع ما بيتغيّر — بس هاد افتراض، وهون بنثبته. لو انكسر، الكابشن
+    الطويل ممكن يرجع ينقصّ.
+    """
+    lay = CAP._layout(text, caps, 1080)
+    f, gap = lay["font"], lay["gap"]
+    for line, total in zip(lay["lines"], lay["totals"]):
+        expected = sum(w for w, _ in CAP._widths(line, f)) + gap * (len(line) - 1)
+        assert total == expected
+        # وبأي ترتيب، نفس المجموع
+        shuffled = [line[i] for i in CAP._bidi_runs(line)]
+        assert sum(w for w, _ in CAP._widths(shuffled, f)) + gap * (len(line) - 1) \
+               == expected
+
+
+@needs_raqm
+def test_highlight_reaches_words_on_the_second_line(caps):
+    """
+    ثغرة تغطية كشفتها المطافرة: ما كان في فحص بيلوّن كلمة على السطر
+    الثاني، فنسيان `line_start` كان بيمرق. بدونه `logical_index` بيرجع
+    يبلّش من صفر بكل سطر، فأي كلمة بالسطر الثاني ما بتتلوّن أبدًا.
+    """
+    lay = CAP._layout(MULTILINE, caps, 1080)
+    assert len(lay["lines"]) == 2
+    first_line_len = len(lay["lines"][0])
+    tokens = MULTILINE.split()
+
+    # كلمة من السطر الثاني بفهرسها المنطقي
+    logical_index = first_line_len
+    assert tokens[logical_index] == lay["lines"][1][0]
+    centre = highlight_centre(MULTILINE, caps, logical_index)
+    assert centre > 0
+
+
+@needs_raqm
+def test_every_word_on_both_lines_is_reachable(caps):
+    """كل فهرس منطقي لازم يلوّن شي — ولا واحد بينضيع بحدود الأسطر."""
+    tokens = MULTILINE.split()
+    for logical_index in range(len(tokens)):
+        highlight_centre(MULTILINE, caps, logical_index)   # بتفشل لو ما لوّن
+
+
+@needs_raqm
+def test_highlighted_word_is_on_the_expected_line(caps):
+    """الفهرس المنطقي لازم يوقع على السطر الصح عموديًا كمان."""
+    bare = dict(caps, box=[0, 0, 0, 0], color=[255, 255, 255])
+    lay = CAP._layout(MULTILINE, caps, 1080)
+    first_line_len = len(lay["lines"][0])
+    r, g, b = caps["highlight"]
+
+    def rows(logical_index):
+        img = CAP.render_caption(MULTILINE, bare, 1080,
+                                 highlight_idx=logical_index).convert("RGB")
+        px = img.load()
+        ys = [y for y in range(img.height) for x in range(0, img.width, 3)
+              if abs(px[x, y][0] - r) < 40 and abs(px[x, y][1] - g) < 40
+              and abs(px[x, y][2] - b) < 40]
+        return min(ys), max(ys)
+
+    top_first = rows(0)[0]                       # كلمة من السطر الأول
+    top_second = rows(first_line_len)[0]         # أول كلمة بالسطر الثاني
+    assert top_second > top_first, "كلمة السطر الثاني انرسمت بمستوى الأول"

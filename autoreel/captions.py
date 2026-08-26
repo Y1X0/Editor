@@ -313,17 +313,25 @@ def render_caption(text, cfg, W, highlight_idx=None):
     dr.rounded_rectangle([0, 0, img_w - 1, img_h - 1],
                          radius=int(img_h * 0.30), fill=tuple(cfg["box"]))
 
-    gi = 0
+    # ⚠️ اسمان لا يلتبسوا — أغلب الباگات هون بتيجي من خلطهن:
+    #   logical_index = مكان التوكن بالنص، وهو اللي `highlight_idx` بيشير إله
+    #   draw_position = مكان رسمه على الصورة من اليسار لليمين
+    # بالعربي الخالص هدول معكوس بعض، وبالمختلط لا هيك ولا هيك.
+    line_start = 0                       # أول logical_index بهالسطر
     for li, ln in enumerate(lines):
         y = pad_y - top + li * (th + leading)
-        # ترتيب RTL: أول كلمة بالسطر أقصى اليمين، وبننقص لليسار
-        xr = (img_w + totals[li]) / 2
-        for w, (wpx, ox) in zip(ln, per_line[li]):
-            col = tuple(cfg["highlight"]) if gi == highlight_idx else tuple(cfg["color"])
-            dr.text((xr - wpx - ox, y), w, font=f, fill=col + (255,),
+        # الترتيب البصري لهالسطر لحاله. run بينقسم على سطرين بينرتّب
+        # داخل كل سطر — حد موثّق بـCLAUDE.md وعليه اختبار.
+        x = (img_w - totals[li]) / 2      # من اليسار لليمين
+        for draw_position in _bidi_runs(ln):
+            logical_index = line_start + draw_position
+            wpx, ox = per_line[li][draw_position]
+            col = (tuple(cfg["highlight"]) if logical_index == highlight_idx
+                   else tuple(cfg["color"]))
+            dr.text((x - ox, y), ln[draw_position], font=f, fill=col + (255,),
                     direction="rtl", language="ar")
-            xr -= wpx + gap
-            gi += 1
+            x += wpx + gap
+        line_start += len(ln)
     return img
 
 
