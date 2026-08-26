@@ -14,7 +14,7 @@
 بيضل يشتغل على بيئة بلا raqm بدل ما يفشل قبل ما يبلّش.
 """
 from PIL import Image, ImageDraw, ImageFont, features
-import os
+import os, sys
 
 _FC = {}
 
@@ -63,8 +63,8 @@ def group_words(words, max_words=4, max_gap=0.55):
 _MEASURE = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
 
 # حدود التصغير التلقائي (نسبة من `captions.size`)
-_WRAP_BELOW = 0.75   # لو ما زبط سطر واحد لحد هون -> لفّ سطرين بالحجم الكامل
 _HARD_MIN = 0.45     # أصغر حجم مسموح فيه إطلاقًا قبل الاستسلام
+_SMALL_WARN = 55     # تحت هيك النص كامل بس ما بينقرا على الموبايل
 _MAX_LINES = 2
 
 _FIT_CACHE = {}
@@ -108,18 +108,16 @@ def _wrap(words, widths, gap, avail):
 
 def _fit(words, font_path, base_size, avail_outer):
     """
-    يلاقي أكبر حجم خط بيخلّي النص يزبط بدون ما ننقص ولا حرف.
+    يلاقي التخطيط اللي بيعطي **أكبر حجم خط**، وعند التعادل أقل أسطر.
 
-    الترتيب مقصود:
-      ١. سطر واحد بأكبر حجم من ١٠٠٪ لحد ٧٥٪.
-      ٢. ما زبط؟ ارجع للحجم الكامل ولفّه سطرين (سطرين بحجم كبير أوضح
-         من سطر واحد بخط زغير).
-      ٣. لسا ما زبط؟ كمّل تصغير بسطرين لحد ٤٥٪.
-      ٤. آخر ملجأ: أصغر حجم — بيطلع أسطر أكتر بس ولا كلمة بتنقص.
+    مسح تنازلي من `base_size` لحد أرضية ٤٥٪، وأول حجم بيسع بسطرين أو
+    أقل بيفوز. تفضيل "أقل أسطر" بيتحقق لحاله: `_wrap` جشعة فبتعطي أقل
+    عدد أسطر ممكن لكل حجم — لو النص بيسع بسطر واحد بترجّع سطر واحد.
+
+    آخر ملجأ عند الأرضية: بنقبل أي عدد أسطر. النص ما بينقصّ بأي مسار.
 
     يرجّع (size, lines).
     """
-    lo = max(8, int(base_size * _WRAP_BELOW))
     hard = max(8, int(base_size * _HARD_MIN))
 
     def try_size(size, max_lines):
@@ -130,19 +128,13 @@ def _fit(words, font_path, base_size, avail_outer):
             return lines
         return None
 
-    for size in range(base_size, lo - 1, -1):          # ١
-        lines = try_size(size, 1)
-        if lines:
-            return size, lines
-
-    for size in range(base_size, hard - 1, -1):        # ٢ و ٣
+    for size in range(base_size, hard - 1, -1):
         lines = try_size(size, _MAX_LINES)
         if lines:
             return size, lines
 
-    f = _font(font_path, hard)                         # ٤ — لا نقصّ أبدًا
-    _, _, gap = _margins(hard)
-    pad_x, _, _ = _margins(hard)
+    f = _font(font_path, hard)                    # الأرضية — لا نقصّ أبدًا
+    pad_x, _, gap = _margins(hard)
     lines = _wrap(words, _widths(words, f), gap, avail_outer - pad_x * 2)
     return hard, lines or [words]
 
@@ -162,6 +154,12 @@ def render_caption(text, cfg, W, highlight_idx=None):
     key = (text, cfg["font"], cfg["size"], W)
     if key not in _FIT_CACHE:                # نفس الجملة بتنرسم مرة لكل كلمة
         _FIT_CACHE[key] = _fit(words, cfg["font"], cfg["size"], W - 60)
+        sz = _FIT_CACHE[key][0]
+        if sz < _SMALL_WARN:                 # مرة وحدة للجملة، مش لكل إطار
+            print(f"⚠️  الكابشن انصغّر لحجم {sz} (الأصلي {cfg['size']}) — كامل بس "
+                  f"صعب يتقرا على الموبايل: «{text}»\n"
+                  f"    جرّب تصغير captions.max_words أو captions.size.",
+                  file=sys.stderr)
     size, lines = _FIT_CACHE[key]
 
     f = _font(cfg["font"], size)
@@ -197,20 +195,32 @@ def render_caption(text, cfg, W, highlight_idx=None):
     return img
 
 
-# فجوة بين مجموعتين أقصر من هيك بتنجسر: آخر إطار بيمتد لبداية المجموعة
-# الجاية بدل ما الكابشن يطفي للحظة. أطول من هيك = صمت حقيقي، والاختفاء
-# مقصود. شوف CLAUDE.md لسبب الرقم.
-BRIDGE_GAP = 0.40
+# عتبة جسر الفجوة بين مجموعتين. لازم تساوي `cuts.min_gap` — القص بيشيل
+# أي صمت **أطول** من min_gap، يعني كل فجوة بتنجى بعد القص ≤ min_gap.
+# `cli.py` بتمرّرها من الconfig؛ هاي بس القيمة الافتراضية لو حدا ناداها
+# مباشرة. شوف CLAUDE.md.
+DEFAULT_BRIDGE_GAP = 0.45
+
+# تسامح للمقارنة عند الحد بالضبط. توقيتات الكلمات بتيجي من جمع وطرح
+# عائم، فالفجوة اللي المفروض تكون 0.45 بتطلع 0.45000000000000007.
+# بنميل للجسر عند الشك — الطفي أوضح للعين من امتداد زيادة بجزء من الألف.
+_EPS = 1e-6
 
 
-def build_caption_pngs(groups, cfg, W, outdir, karaoke=True, bridge_gap=BRIDGE_GAP):
+def build_caption_pngs(groups, cfg, W, outdir, karaoke=True,
+                       bridge_gap=DEFAULT_BRIDGE_GAP):
     """
     يولّد ملفات PNG للكابشن.
     karaoke=True -> نسخة لكل كلمة عشان تتلوّن وقت نطقها.
 
     التوقيت: كل إطار بيضل معروض لحد ما يبلّش اللي بعده — ما في فراغ جوا
-    المجموعة. آخر إطار بيمتد لبداية المجموعة الجاية لو الفجوة أقصر من
+    المجموعة. آخر إطار بيمتد لبداية المجموعة الجاية لو الفجوة <=
     `bridge_gap`، وإلا بينتهي عند نهاية المجموعة.
+
+    مرّر `bridge_gap=cfg["cuts"]["min_gap"]` حتى كل فجوة ناجية من القص
+    تنجسر. المقارنة `<=` مش `<` عشان الفجوة اللي بتساوي min_gap بالضبط
+    بتنجى من القص (الشرط هناك `> min_gap`) فلازم تنجسر كمان، مع تسامح
+    `_EPS` لأن جمع/طرح العائمة بيعطي 0.45000000000000007 عند الحد.
 
     يرجّع [(png_path, start, end)]
     """
@@ -224,7 +234,8 @@ def build_caption_pngs(groups, cfg, W, outdir, karaoke=True, bridge_gap=BRIDGE_G
         # نهاية آخر إطار بهالمجموعة. الفجوة السالبة (مجموعات متداخلة)
         # بتنقص كمان لـ nxt فما بيتراكبوا كابشنين.
         nxt = groups[gi + 1]["start"] if gi + 1 < len(groups) else None
-        tail = nxt if (nxt is not None and nxt - g["end"] < bridge_gap) else g["end"]
+        tail = (nxt if (nxt is not None and nxt - g["end"] <= bridge_gap + _EPS)
+                else g["end"])
 
         if karaoke and len(g["words"]) > 1:
             raw = g["raw"]

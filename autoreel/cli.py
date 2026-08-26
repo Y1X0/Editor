@@ -19,6 +19,12 @@ def main():
     if a.no_motion:
         cfg["motion"]["enabled"] = False
 
+    want_caps = cfg["captions"]["enabled"] and not a.no_captions
+    if want_caps:
+        # افشل هلأ مش بعد ما القص والزوم ياكلوا دقايق ffmpeg. مشروط عمدًا:
+        # بدون الشرط بينكسر --no-captions على بيئة بلا raqm.
+        CAP._require_raqm()
+
     work = tempfile.mkdtemp(prefix="autoreel_")
     try:
         dur = C.probe_duration(a.input)
@@ -43,12 +49,14 @@ def main():
         print("[4/5] القص والزوم خلصوا")
 
         caps = []
-        if cfg["captions"]["enabled"] and not a.no_captions and words:
+        if want_caps and words:
             w2 = C.remap_words(words, segs)
             groups = CAP.group_words(w2, cfg["captions"]["max_words"])
             caps = CAP.build_caption_pngs(groups, cfg["captions"],
                                           cfg["output"]["width"],
-                                          os.path.join(work, "caps"))
+                                          os.path.join(work, "caps"),
+                                          # كل فجوة ناجية من القص لازم تنجسر
+                                          bridge_gap=cfg["cuts"]["min_gap"])
             print(f"[5/5] {len(groups)} كابشن ({len(caps)} إطار)")
 
         R.burn_captions(base, caps, cfg, a.output)
