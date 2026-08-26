@@ -79,6 +79,22 @@ def remap_words(words, segs, min_ratio=0.45):
     return out
 
 
+def dropped_words(words, segs, min_ratio=0.45):
+    """
+    الكلمات اللي ما بتنجو من القص، بترتيبها الأصلي.
+
+    نفس قاعدة `remap_words` بالضبط عشان ما تفترقوا: كلمة بتنشال إما
+    لأن مقطعها انحذف (`min_seg` بتشيل المقاطع القصيرة بصمت) أو لأن
+    تداخلها التراكمي تحت العتبة.
+    """
+    out = []
+    for w in words:
+        ov = sum(max(0.0, min(w["end"], b) - max(w["start"], a)) for a, b in segs)
+        if ov / max(1e-6, w["end"] - w["start"]) < min_ratio:
+            out.append(w["word"])
+    return out
+
+
 def total_after_cut(segs):
     return sum(b - a for a, b in segs)
 

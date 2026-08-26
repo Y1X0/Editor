@@ -1,7 +1,8 @@
 """خطة القص وإعادة تخطيط التوقيتات — دوال نقية، بلا ffmpeg."""
 import pytest
 
-from autoreel.cuts import remap_words, segments_from_words, total_after_cut
+from autoreel.cuts import (dropped_words, remap_words, segments_from_words,
+                          total_after_cut)
 from conftest import words
 
 
@@ -148,3 +149,36 @@ def test_repeated_word_keeps_its_own_timing():
 def test_three_identical_words_all_survive():
     w = words(("لا", 0.1, 0.3), ("لا", 0.32, 0.52), ("لا", 0.54, 0.74))
     assert len(remap_words(w, [(0.0, 2.0)])) == 3
+
+
+# ------------------------------------------------------- dropped_words
+
+def test_dropped_words_names_what_min_seg_removed():
+    """كان بيصير بصمت — كلمة قصيرة لحالها بتختفي من الريل بلا خبر."""
+    w = words(("aa", 0.0, 0.5), ("bb", 2.0, 2.05), ("cc", 4.0, 4.6))
+    segs = segments_from_words(w, 6.0, min_gap=0.45, pad=0.10, min_seg=0.35)
+    assert remap_words(w, segs) and dropped_words(w, segs) == ["bb"]
+
+
+def test_dropped_words_is_empty_when_nothing_is_lost():
+    w = words(("a", 0.0, 0.5), ("b", 0.7, 1.2))
+    assert dropped_words(w, segments_from_words(w, 3.0)) == []
+
+
+def test_dropped_words_matches_remap_exactly():
+    """
+    نفس القاعدة بالضبط — لو افترقوا، التحذير بيكذب: بيسرد كلمات موجودة
+    أو بيسكت عن كلمات ضايعة.
+    """
+    w = words(("keep", 0.0, 0.5), ("gone", 2.0, 2.5), ("edge", 3.8, 4.8),
+              ("keep2", 5.0, 5.5))
+    segs = [(0.0, 0.6), (3.9, 4.2), (4.9, 5.6)]
+    kept = {x["word"] for x in remap_words(w, segs)}
+    gone = set(dropped_words(w, segs))
+    assert kept | gone == {x["word"] for x in w}
+    assert not (kept & gone)
+
+
+def test_dropped_words_keeps_source_order():
+    w = words(("a", 0.0, 0.1), ("b", 1.0, 1.1), ("c", 2.0, 2.1))
+    assert dropped_words(w, [(5.0, 6.0)]) == ["a", "b", "c"]

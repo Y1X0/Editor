@@ -55,7 +55,7 @@
     "square": {
       "output": { "width": 1080, "height": 1080 },
       "captions": { "size": 44, "y_ratio": 0.80 },
-      "geometry": { "crop_bias": 0.38 }
+      "geometry": { "crop_bias": 0.30 }
     },
     "wide": {
       "output": { "width": 1920, "height": 1080 },

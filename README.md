@@ -25,15 +25,22 @@ python -c "from PIL import features; print('raqm:', features.check('raqm'))"
 python -m autoreel.cli raw.mp4 -o reel.mp4
 python -m autoreel.cli raw.mp4 --srt subs.srt -o reel.mp4    # بدون Whisper
 python -m autoreel.cli raw.mp4 --no-cut --no-motion -o reel.mp4
+python -m autoreel.cli raw.mp4 --sizes all -o reel.mp4        # ريلز + مربع + عريض
+python -m autoreel.cli raw.mp4 --sizes all --preview-frames -o reel.mp4
 python -m autoreel.cli raw.mp4 --dry-run -o reel.mp4          # اطبع أوامر ffmpeg بس
 ```
 
+على فيديو جديد شغّل `--preview-frames` أول شي: بيطلّع إطار PNG من كل
+مقاس بلا ترميز، فتشوف نافذة القص قبل ما تصرف دقايق. لو الوجه مقصوص
+بالمربع، عدّل `geometry.crop_bias` (أصغر = النافذة بتطلع لفوق).
+
 أول تشغيل بينزّل موديل Whisper (~٥٠٠MB للـ small). التفريغ بينحفظ بملف
-`raw.words.json` جنب الفيديو، فالتشغيلات الجاية أسرع بكتير.
+`raw.small.ar.words.json` جنب الفيديو — الموديل واللغة جزء من الاسم،
+فتغييرهن بالconfig بيفرّغ من جديد بدل ما يرجّع نتيجة قديمة.
 
 ## المخرجات
 
-1080×1920 · H.264 · الصوت مقصوص مع الصورة بنفس التوقيت.
+`reel` 1080×1920 · `square` 1080×1080 · `wide` 1920×1080 · H.264 · الصوت مقصوص مع الصورة بنفس التوقيت.
 
 ## الاختبارات
 

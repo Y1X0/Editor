@@ -101,3 +101,28 @@ def test_words_are_ordered(tmp_path):
     assert [w["start"] for w in out] == sorted(w["start"] for w in out)
     for w in out:
         assert w["end"] > w["start"]
+
+
+# --------------------------------------------------------- cache_path
+
+def test_cache_path_includes_model_and_language():
+    """
+    الانحدار: المفتاح كان مسار الملف بس، فتغيير whisper_model أو
+    language بيرجّع تفريغ قديم بصمت.
+    """
+    from autoreel.transcribe import cache_path
+    a = cache_path("/v/raw.mp4", "small", "ar")
+    assert cache_path("/v/raw.mp4", "medium", "ar") != a
+    assert cache_path("/v/raw.mp4", "small", "en") != a
+    assert cache_path("/v/other.mp4", "small", "ar") != a
+
+
+def test_cache_path_is_still_gitignored():
+    from autoreel.transcribe import cache_path
+    assert cache_path("/v/raw.mp4", "small", "ar").endswith(".words.json")
+
+
+def test_cache_path_sits_next_to_the_video():
+    import os
+    from autoreel.transcribe import cache_path
+    assert os.path.dirname(cache_path("/v/raw.mp4", "small", "ar")) == "/v"

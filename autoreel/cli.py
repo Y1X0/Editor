@@ -31,13 +31,23 @@ def _one_export(name, cfg, src, segs, w2, out_path, work, a, multi):
                                       bridge_gap=cfg["cuts"]["min_gap"])
         print(f"  {tag} {len(groups)} كابشن ({len(caps)} إطار)")
 
+    fit = cfg.get("geometry", {}).get("fit", "crop")
+    size = cfg["captions"]["size"]
+
+    if a.preview_frames:
+        # منتصف أول مقطع: بالمصدر للـseek، وبالتوقيت الجديد للكابشن.
+        a0, b0 = segs[0]
+        png = next((p for p, s, e in caps if s <= (b0 - a0) / 2 <= e), None)
+        R.preview_frame(src, (a0 + b0) / 2, cfg, out_path, caption_png=png,
+                        dry_run=a.dry_run)
+        return (f"  {name:<8} {W}×{H}  fit={fit:<5} "
+                f"crop_bias={cfg.get('geometry', {}).get('crop_bias', 0.5)}  {out_path}")
+
     base = R.build_base(src, segs, cfg, os.path.join(work, name),
                         dry_run=a.dry_run)
     R.burn_captions(base, caps, cfg, out_path,
                     workdir=os.path.join(work, name), dry_run=a.dry_run)
 
-    fit = cfg.get("geometry", {}).get("fit", "crop")
-    size = cfg["captions"]["size"]
     mb = "" if a.dry_run else f" · {os.path.getsize(out_path)/1e6:.1f}MB"
     return f"  {name:<8} {W}×{H}  fit={fit:<5} خط={size}{mb}  {out_path}"
 
@@ -55,6 +65,8 @@ def main():
     ap.add_argument("--keep", action="store_true", help="خلّي الملفات المؤقتة")
     ap.add_argument("--dry-run", action="store_true",
                     help="اطبع أوامر ffmpeg بدون ما تشغّلها")
+    ap.add_argument("--preview-frames", action="store_true",
+                    help="إطار PNG من كل مقاس ووقّف — قبل ما تصرف ترميز")
     a = ap.parse_args()
 
     root = json.load(open(a.config, encoding="utf-8"))
@@ -77,12 +89,20 @@ def main():
         dur = C.probe_duration(a.input)
         print(f"[1/4] المدة الأصلية: {dur:.1f}s")
 
+        # Whisper لازم للقص أو للكابشن. بدون الاتنين ما إله لزوم، وقبل
+        # هيك كان بينزّل الموديل ويفرّغ بلا فايدة نهائيًا.
+        need_words = (not a.no_cut) or want_caps
         if a.srt:
             words = T.from_srt(a.srt)
+            print(f"[2/4] تفريغ: {len(words)} كلمة (من SRT)")
+        elif need_words:
+            words = T.transcribe(
+                a.input, root["whisper_model"], root["language"],
+                cache=T.cache_path(a.input, root["whisper_model"], root["language"]))
+            print(f"[2/4] تفريغ: {len(words)} كلمة")
         else:
-            words = T.transcribe(a.input, root["whisper_model"], root["language"],
-                                 cache=os.path.splitext(a.input)[0] + ".words.json")
-        print(f"[2/4] تفريغ: {len(words)} كلمة")
+            words = []
+            print("[2/4] تفريغ: تخطّي — لا قص ولا كابشن")
 
         if a.no_cut or not words:
             segs = [(0.0, dur)]
@@ -92,16 +112,26 @@ def main():
         print(f"[3/4] {len(segs)} مقطع · بعد القص {new_dur:.1f}s "
               f"(انشال {dur-new_dur:.1f}s)")
 
+        # `min_seg` بتشيل المقاطع القصيرة وكلماتها. كان بيصير بصمت،
+        # فكلمة قصيرة لحالها («تمام»، «أيوا») بتختفي من الريل بلا خبر.
+        gone = C.dropped_words(words, segs, min_ratio=0.45) if words else []
+        if gone:
+            print(f"⚠️  {len(gone)} كلمة انشالت مع القص: "
+                  f"{' · '.join(gone[:12])}{' …' if len(gone) > 12 else ''}\n"
+                  f"    صغّر cuts.min_seg لو كنت بدك تبقيها.", file=sys.stderr)
+
         # التوقيتات بعد القص — دالة نقية من (words, segs)، فمشتركة بين
         # كل المقاسات. حسابها مرة بيضمن كمان إنها متطابقة بينهن.
         w2 = C.remap_words(words, segs) if words else []
 
         # ---- لكل مقاس: كابشن جديد + ترميز ----
-        print(f"[4/4] تصدير {len(picked)} مقاس: {', '.join(picked)}")
+        what = "معاينة" if a.preview_frames else "تصدير"
+        print(f"[4/4] {what} {len(picked)} مقاس: {', '.join(picked)}")
         rows = []
         for name in picked:
             cfg = X.resolve(root, name)
-            out_path = X.output_path(a.output, name, multi)
+            out_path = (X.preview_path(a.output, name, multi) if a.preview_frames
+                        else X.output_path(a.output, name, multi))
             d = os.path.dirname(os.path.abspath(out_path))
             os.makedirs(d, exist_ok=True)
             os.makedirs(os.path.join(work, name), exist_ok=True)
@@ -113,10 +143,18 @@ def main():
                 failed.append(name)
                 print(f"  ❌ [{name}] {e}", file=sys.stderr)
 
-        head = "🔍 تجربة جافة — ما انكتب ولا ملف" if a.dry_run else "✅ خلص"
+        if a.dry_run:
+            head = "🔍 تجربة جافة — ما انكتب ولا ملف"
+        elif a.preview_frames:
+            head = "🖼️  إطارات معاينة — ما انعمل ترميز"
+        else:
+            head = "✅ خلص"
         print(f"\n{head}  ({new_dur:.1f}s)")
         for r in rows:
             print(r)
+        if a.preview_frames and not a.dry_run:
+            print("\n    شوف الإطارات وعدّل geometry.crop_bias إذا الوجه مقصوص،"
+                  "\n    بعدين شغّل بدون --preview-frames.")
         if failed:
             print(f"\n❌ فشل: {', '.join(failed)}", file=sys.stderr)
     finally:

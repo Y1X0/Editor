@@ -2,6 +2,17 @@
 import os, json
 
 
+def cache_path(video_path, model_size, language):
+    """
+    مسار كاش التفريغ.
+
+    الموديل واللغة **جزء من الاسم**: قبل هيك كان المفتاح مسار الملف بس،
+    فتغيير `whisper_model` أو `language` بالconfig بيرجّع تفريغ قديم
+    بصمت وأنت مستني نتيجة الموديل الجديد.
+    """
+    return f"{os.path.splitext(video_path)[0]}.{model_size}.{language}.words.json"
+
+
 def transcribe(path, model_size="small", language="ar", cache=None):
     if cache and os.path.exists(cache):
         return json.load(open(cache, encoding="utf-8"))

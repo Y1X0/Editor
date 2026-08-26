@@ -86,3 +86,10 @@ def output_path(base_out, name, multi):
         return base_out
     root, ext = os.path.splitext(base_out)
     return f"{root}.{name}{ext or '.mp4'}"
+
+
+def preview_path(base_out, name, multi):
+    """مسار إطار المعاينة — نفس قاعدة التسمية بس بامتداد png."""
+    import os
+    root, _ = os.path.splitext(output_path(base_out, name, multi))
+    return root + ".preview.png"

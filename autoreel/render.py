@@ -92,6 +92,29 @@ def segment_filter(cfg, zoom=1.0, pan_dir=0):
             f"fps={fps},setsar=1")
 
 
+def preview_frame(src, at, cfg, out_path, caption_png=None, dry_run=False):
+    """
+    إطار PNG واحد بهندسة هالمقاس، بلا ترميز فيديو.
+
+    وجودها لأن `geometry.crop_bias` بينضبط على تأطير فيديوك إنت. رقم
+    واحد ما بيزبط لكل التأطيرات، والمستخدم لازم يشوف نافذة القص قبل
+    ما يصرف دقايق ترميز على مقاس بيقصّ الوجه.
+    """
+    cycle = cfg["motion"]["zoom_cycle"] if cfg["motion"]["enabled"] else [1.0]
+    vf = segment_filter(cfg, zoom=cycle[0], pan_dir=1)
+
+    cmd = ["ffmpeg", "-y", "-loglevel", "error", "-ss", f"{at:.3f}", "-i", src]
+    if caption_png:
+        y = int(cfg["output"]["height"] * cfg["captions"]["y_ratio"])
+        cmd += ["-i", caption_png, "-filter_complex",
+                f"[0:v]{vf}[base];[base][1:v]overlay=x=(W-w)/2:y={y}-h/2"]
+    else:
+        cmd += ["-vf", vf]
+    cmd += ["-frames:v", "1", out_path]
+    run(cmd, dry_run=dry_run)
+    return out_path
+
+
 def build_base(src, segs, cfg, workdir, dry_run=False):
     """
     يقص المقاطع، يطبّق زوم مختلف لكل مقطع (punch-in)، ويلزقهم.

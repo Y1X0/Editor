@@ -109,7 +109,7 @@ def test_each_size_uses_its_own_geometry(workdir, capsys):
     run_cli(*base_args(cfgp), "--sizes", "all")
     vfs = [c[c.index("-vf") + 1] for c in ffmpeg_cmds(capsys) if "-vf" in c]
     assert any("crop=1080:1920:" in v for v in vfs)          # reel
-    assert any("crop=1080:1080:" in v and "*0.3800" in v for v in vfs)   # square
+    assert any("crop=1080:1080:" in v and "*0.3000" in v for v in vfs)   # square
     assert any("split[bg][fg]" in v for v in vfs)            # wide -> pad
 
 
@@ -176,3 +176,97 @@ def test_captions_are_rendered_per_size_not_shared(workdir, capsys):
     pngs = {p for c in ffmpeg_cmds(capsys) for p in c if p.endswith(".png")}
     dirs = {p.rsplit("/", 2)[-2] for p in pngs}
     assert dirs == {"caps_reel", "caps_square", "caps_wide"}, dirs
+
+
+# ============================ --preview-frames ============================
+
+@needs_raqm
+def test_preview_writes_one_png_per_size(workdir, capsys):
+    tmp, cfgp = workdir
+    assert run_cli(*base_args(cfgp), "--sizes", "all", "--preview-frames") == 0
+    targets = [c[-1] for c in ffmpeg_cmds(capsys)]
+    for name in ("reel", "square", "wide"):
+        assert f"out.{name}.preview.png" in " ".join(targets), name
+
+
+@needs_raqm
+def test_preview_does_no_encoding(workdir, capsys):
+    """
+    الهدف كله: تشوف نافذة القص قبل ما تصرف ترميز. أمر واحد لكل مقاس،
+    وما في ولا libx264.
+    """
+    tmp, cfgp = workdir
+    run_cli(*base_args(cfgp), "--sizes", "all", "--preview-frames")
+    cmds = ffmpeg_cmds(capsys)
+    assert len(cmds) == 3                       # واحد لكل مقاس
+    for c in cmds:
+        assert "libx264" not in c
+        assert c[c.index("-frames:v") + 1] == "1"
+
+
+@needs_raqm
+def test_preview_seeks_the_middle_of_the_first_segment(workdir, capsys):
+    tmp, cfgp = workdir
+    run_cli(*base_args(cfgp), "--sizes", "reel", "--preview-frames")
+    c = ffmpeg_cmds(capsys)[0]
+    words = __import__("autoreel.transcribe", fromlist=["t"]).from_srt(
+        str(ROOT / "test.srt"))
+    import json as _json
+    cfg = _json.loads(open(cfgp, encoding="utf-8").read())
+    segs = C.segments_from_words(words, DUR, **cfg["cuts"])
+    a0, b0 = segs[0]
+    assert c[c.index("-ss") + 1] == f"{(a0 + b0) / 2:.3f}"
+
+
+@needs_raqm
+def test_preview_uses_each_size_geometry(workdir, capsys):
+    tmp, cfgp = workdir
+    run_cli(*base_args(cfgp), "--sizes", "all", "--preview-frames")
+    chains = " ".join(" ".join(c) for c in ffmpeg_cmds(capsys))
+    assert "crop=1080:1920:" in chains
+    assert "*0.3000" in chains                  # crop_bias تبع المربع
+    assert "split[bg][fg]" in chains            # pad تبع العريض
+
+
+@needs_raqm
+def test_preview_single_size_keeps_the_plain_name(workdir, capsys):
+    tmp, cfgp = workdir
+    run_cli(*base_args(cfgp), "--preview-frames")
+    assert "out.preview.png" in " ".join(c[-1] for c in ffmpeg_cmds(capsys))
+
+
+@needs_raqm
+def test_preview_overlays_a_caption_when_there_is_one(workdir, capsys):
+    tmp, cfgp = workdir
+    run_cli(*base_args(cfgp), "--sizes", "reel", "--preview-frames")
+    c = ffmpeg_cmds(capsys)[0]
+    assert any(x.endswith(".png") and "caps_" in x for x in c)
+
+
+# ================== تخطي Whisper لما ما إله لزوم ==================
+
+def test_whisper_is_skipped_when_neither_cut_nor_captions(workdir, capsys, monkeypatch):
+    tmp, cfgp = workdir
+    from autoreel import transcribe as T
+
+    def boom(*a, **k):
+        raise AssertionError("Whisper انندهت بلا لزوم")
+    monkeypatch.setattr(T, "transcribe", boom)
+    monkeypatch.setattr(CLI, "T", T)
+
+    args = ["raw.mp4", "-c", cfgp, "-o", "out.mp4", "--dry-run",
+            "--no-cut", "--no-captions"]
+    assert run_cli(*args) == 0
+    assert "تخطّي" in capsys.readouterr().out
+
+
+@needs_raqm
+def test_whisper_still_runs_when_captions_are_on(workdir, capsys, monkeypatch):
+    tmp, cfgp = workdir
+    from autoreel import transcribe as T
+    called = []
+    monkeypatch.setattr(T, "transcribe",
+                        lambda *a, **k: (called.append(1), [])[1])
+    monkeypatch.setattr(CLI, "T", T)
+    run_cli("raw.mp4", "-c", cfgp, "-o", "out.mp4", "--dry-run", "--no-cut")
+    assert called, "الكابشن مفعّل فلازم يفرّغ"
