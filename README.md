@@ -34,6 +34,14 @@ python -m autoreel.cli raw.mp4 --no-cut --no-motion -o reel.mp4
 
 1080×1920 · H.264 · الصوت مقصوص مع الصورة بنفس التوقيت.
 
+## الاختبارات
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+pytest -m "not golden"    # لو مكدّس الخطوط عندك مختلف
+```
+
 ## ملاحظة
 
 كل التفاصيل التقنية والمطبّات موثّقة بـ`CLAUDE.md` — اقرأه قبل ما تعدّل
