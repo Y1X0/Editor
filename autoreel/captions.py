@@ -14,7 +14,7 @@
 بيضل يشتغل على بيئة بلا raqm بدل ما يفشل قبل ما يبلّش.
 """
 from PIL import Image, ImageDraw, ImageFont, features
-import os, sys
+import os, sys, unicodedata
 
 _FC = {}
 
@@ -137,6 +137,66 @@ def _fit(words, font_path, base_size, avail_outer):
     pad_x, _, gap = _margins(hard)
     lines = _wrap(words, _widths(words, f), gap, avail_outer - pad_x * 2)
     return hard, lines or [words]
+
+
+def _token_dir(tok):
+    """
+    اتجاه التوكن من أول محرف **قوي** فيه: 'L' أو 'R'.
+    'N' يعني ما في محرف قوي إطلاقًا (أرقام لحالها، رموز، ترقيم).
+    """
+    for ch in tok:
+        b = unicodedata.bidirectional(ch)
+        if b in ("R", "AL"):
+            return "R"
+        if b == "L":
+            return "L"
+    return "N"
+
+
+def _bidi_runs(tokens):
+    """
+    ترتيب التوكنات **البصري من اليسار لليمين** لسطر قاعدته RTL.
+
+    ليش موجودة: bidi خوارزمية على مستوى السطر، والرسم كلمة كلمة (اللي
+    بيلزمنا للكاريوكي) بيتخطاها. لما كلمتين لاتينيتين بتيجوا ورا بعض،
+    bidi بيعاملهن run واحد بيتقرا من اليسار لليمين، بينما الرسم RTL
+    البحت بيعطي كل وحدة خانة مستقلة فبينقلبوا: «App Store» -> «Store App».
+
+    الحل: نرتّب الـ**runs** مش الكلمات. الـruns بتتصفّ من اليمين
+    لليسار (قاعدة RTL)، وجوّا الـrun اللاتيني الكلمات بتتصفّ من اليسار
+    لليمين.
+
+    قاعدة المحايدات (شوف CLAUDE.md — أكتر وحدة رح تنتنسى):
+    التوكن بلا محرف قوي بياخد اتجاه اللي قبله لو كان 'L'، وإلا 'R'.
+    والمحايد بأول السطر بياخد 'R' لأنها قاعدة السطر.
+
+    يرجّع فهارس التوكنات بترتيب الرسم من اليسار لليمين.
+    """
+    if not tokens:
+        return []
+
+    # ١) صنّف، وحلّ المحايدات حسب اللي قبلها
+    dirs = []
+    for tok in tokens:
+        d = _token_dir(tok)
+        if d == "N":
+            d = "L" if dirs and dirs[-1] == "L" else "R"
+        dirs.append(d)
+
+    # ٢) اجمع المتجاورات بنفس الاتجاه بـrun واحد
+    runs = []
+    for i, d in enumerate(dirs):
+        if runs and runs[-1][0] == d:
+            runs[-1][1].append(i)
+        else:
+            runs.append((d, [i]))
+
+    # ٣) الـruns من اليمين لليسار -> عكسها بيعطي اليسار لليمين.
+    #    جوّا الـrun: اللاتيني بيضل بترتيبه، والعربي بينعكس.
+    out = []
+    for d, idxs in reversed(runs):
+        out.extend(idxs if d == "L" else list(reversed(idxs)))
+    return out
 
 
 def available_width(W):
