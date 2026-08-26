@@ -59,7 +59,7 @@ def main():
                                           bridge_gap=cfg["cuts"]["min_gap"])
             print(f"[5/5] {len(groups)} كابشن ({len(caps)} إطار)")
 
-        R.burn_captions(base, caps, cfg, a.output)
+        R.burn_captions(base, caps, cfg, a.output, workdir=work)
         print(f"\n✅ {a.output}  ({new_dur:.1f}s)")
     finally:
         if a.keep:

@@ -46,10 +46,16 @@ def build_base(src, segs, cfg, workdir):
     return base
 
 
-def burn_captions(base, caps, cfg, out_path, batch=60):
+def burn_captions(base, caps, cfg, out_path, batch=60, workdir=None):
     """
     يحرق الكابشن على دفعات — تجنّبًا لسلسلة overlay طويلة بتكسر ffmpeg
     أو بتاكل الذاكرة على الموبايل.
+
+    `workdir` = وين تنكتب ملفات التمرير الوسيطة. مرّر مجلد العمل المؤقت
+    من `cli.py`. بدونه بتنكتب جنب ملف الإخراج.
+
+    لا تستعمل `os.path.dirname(out_path)` لحاله: مع `-o out.mp4` بترجّع
+    `""` فالملفات بتنكتب بمجلد الشغل وبتضل هناك بعد ما البرنامج يخلص.
     """
     if not caps:
         run(["ffmpeg", "-y", "-loglevel", "error", "-i", base,
@@ -59,7 +65,8 @@ def burn_captions(base, caps, cfg, out_path, batch=60):
     H = cfg["output"]["height"]
     y = int(H * cfg["captions"]["y_ratio"])
     cur = base
-    tmpdir = os.path.dirname(out_path)
+    tmpdir = workdir or os.path.dirname(os.path.abspath(out_path))
+    stale = None            # تمريرة سابقة صارت غير لازمة
 
     for bi in range(0, len(caps), batch):
         chunk = caps[bi:bi + batch]
@@ -72,11 +79,20 @@ def burn_captions(base, caps, cfg, out_path, batch=60):
             fc.append(f"[{last}][{k}:v]overlay=x=(W-w)/2:y={y}-h/2:"
                       f"enable='between(t,{s:.3f},{e:.3f})'[{tag}]")
             last = tag
-        nxt = out_path if bi + batch >= len(caps) else os.path.join(tmpdir, f"pass{bi}.mp4")
+        final = bi + batch >= len(caps)
+        nxt = out_path if final else os.path.join(tmpdir, f"pass{bi:05d}.mp4")
         cmd += ["-filter_complex", ";".join(fc), "-map", f"[{last}]",
                 "-map", "0:a?", "-c:v", "libx264", "-crf", str(cfg["output"]["crf"]),
                 "-preset", "veryfast", "-pix_fmt", "yuv420p",
                 "-c:a", "copy", "-movflags", "+faststart", nxt]
         run(cmd)
+        # التمريرة السابقة انقرأت خلص. كل واحدة فيديو كامل، فتركهن
+        # بيضاعف استهلاك القرص مع كل دفعة.
+        if stale:
+            try:
+                os.remove(stale)
+            except OSError:
+                pass
+        stale = None if final else nxt
         cur = nxt
     return out_path

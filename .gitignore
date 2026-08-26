@@ -3,3 +3,4 @@ __pycache__/
 *.words.json
 out*.mp4
 test_in.mp4
+pass*.mp4
