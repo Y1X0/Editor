@@ -9,17 +9,31 @@
 
 الصح: مرّر النص الخام + direction="rtl" + language="ar".
 تحقق: from PIL import features; features.check("raqm")  ->  لازم True
+
+فحص raqm بينعمل عند أول رسم كابشن، مش وقت الاستيراد — هيك `--no-captions`
+بيضل يشتغل على بيئة بلا raqm بدل ما يفشل قبل ما يبلّش.
 """
 from PIL import Image, ImageDraw, ImageFont, features
 import os
 
-if not features.check("raqm"):
-    raise RuntimeError(
-        "Pillow بدون دعم raqm — الكابشن العربي رح يطلع غلط.\n"
-        "Termux:  pkg install libraqm harfbuzz fribidi && pip install --no-binary :all: --force-reinstall Pillow"
-    )
-
 _FC = {}
+
+
+def _require_raqm():
+    """
+    بينداء عند أول رسم كابشن فقط.
+
+    لا تنقله لمستوى الموديول: `cli.py` بتستورد هالملف دايمًا، فالرفع
+    وقت الاستيراد كان بيكسر حتى `--no-captions` — وهي الطريق الوحيد
+    لتشغيل الأداة على بيئة بلا raqm.
+    """
+    if not features.check("raqm"):
+        raise RuntimeError(
+            "Pillow بدون دعم raqm — الكابشن العربي رح يطلع غلط.\n"
+            "Termux:  pkg install libraqm harfbuzz fribidi && "
+            "pip install --no-binary :all: --force-reinstall Pillow\n"
+            "أو شغّل بدون كابشن:  python -m autoreel.cli in.mp4 --no-captions -o out.mp4"
+        )
 
 
 def _font(path, size):
@@ -140,6 +154,7 @@ def render_caption(text, cfg, W, highlight_idx=None):
     بيصغّر الخط تلقائيًا ويلفّ سطرين وقت اللزوم — النص ما بينقصّ أبدًا.
     شوف `_fit` لترتيب المحاولات.
     """
+    _require_raqm()
     words = text.split()
     if not words:
         return Image.new("RGBA", (1, 1), (0, 0, 0, 0))
