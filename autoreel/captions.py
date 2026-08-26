@@ -182,30 +182,51 @@ def render_caption(text, cfg, W, highlight_idx=None):
     return img
 
 
-def build_caption_pngs(groups, cfg, W, outdir, karaoke=True):
+# فجوة بين مجموعتين أقصر من هيك بتنجسر: آخر إطار بيمتد لبداية المجموعة
+# الجاية بدل ما الكابشن يطفي للحظة. أطول من هيك = صمت حقيقي، والاختفاء
+# مقصود. شوف CLAUDE.md لسبب الرقم.
+BRIDGE_GAP = 0.40
+
+
+def build_caption_pngs(groups, cfg, W, outdir, karaoke=True, bridge_gap=BRIDGE_GAP):
     """
     يولّد ملفات PNG للكابشن.
     karaoke=True -> نسخة لكل كلمة عشان تتلوّن وقت نطقها.
+
+    التوقيت: كل إطار بيضل معروض لحد ما يبلّش اللي بعده — ما في فراغ جوا
+    المجموعة. آخر إطار بيمتد لبداية المجموعة الجاية لو الفجوة أقصر من
+    `bridge_gap`، وإلا بينتهي عند نهاية المجموعة.
+
     يرجّع [(png_path, start, end)]
     """
     os.makedirs(outdir, exist_ok=True)
     out, n = [], 0
-    for g in groups:
+    for gi, g in enumerate(groups):
         text = " ".join(g["words"])
         if not text.strip():
             continue
+
+        # نهاية آخر إطار بهالمجموعة. الفجوة السالبة (مجموعات متداخلة)
+        # بتنقص كمان لـ nxt فما بيتراكبوا كابشنين.
+        nxt = groups[gi + 1]["start"] if gi + 1 < len(groups) else None
+        tail = nxt if (nxt is not None and nxt - g["end"] < bridge_gap) else g["end"]
+
         if karaoke and len(g["words"]) > 1:
-            for i, w in enumerate(g["raw"]):
+            raw = g["raw"]
+            for i, w in enumerate(raw):
+                s = w["start"]
+                # لحد ما تبلّش الكلمة الجاية — مش لحد ما تخلص هاي الكلمة،
+                # وإلا الكابشن بيطفي بالفراغ اللي بينهن.
+                e = raw[i + 1]["start"] if i < len(raw) - 1 else tail
+                if e - s <= 0.02:
+                    continue
                 p = os.path.join(outdir, f"cap{n:05d}.png")
                 render_caption(text, cfg, W, highlight_idx=i).save(p)
-                s = w["start"]
-                e = w["end"] if i < len(g["raw"]) - 1 else g["end"]
-                if e - s > 0.02:
-                    out.append((p, s, e))
+                out.append((p, s, e))
                 n += 1
         else:
             p = os.path.join(outdir, f"cap{n:05d}.png")
             render_caption(text, cfg, W).save(p)
-            out.append((p, g["start"], g["end"]))
+            out.append((p, g["start"], tail))
             n += 1
     return out
