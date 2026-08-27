@@ -322,12 +322,12 @@ def test_latin_run_split_across_lines_is_ordered_per_line(caps):
     assert len(lay["lines"]) == 2, "الحالة لازم تلف سطرين"
 
     latin = [w for w in MULTILINE.split() if CAP._token_dir(w) == "L"]
-    split = [w for w in lay["lines"][0] if w in latin] and \
-            [w for w in lay["lines"][1] if w in latin]
+    split = [w for w in lay["texts"][0] if w in latin] and \
+            [w for w in lay["texts"][1] if w in latin]
     assert split, "الـrun اللاتيني لازم ينقسم على السطرين"
 
     # كل سطر مرتّب داخليًا حسب bidi تبعه
-    for line in lay["lines"]:
+    for line in lay["texts"]:
         order = CAP._bidi_runs(line)
         assert sorted(order) == list(range(len(line)))
 
@@ -354,7 +354,7 @@ def test_layout_width_is_independent_of_ordering(caps, text):
     """
     lay = CAP._layout(text, caps, 1080)
     f, gap = lay["font"], lay["gap"]
-    for line, total in zip(lay["lines"], lay["totals"]):
+    for line, total in zip(lay["texts"], lay["totals"]):
         expected = sum(w for w, _ in CAP._widths(line, f)) + gap * (len(line) - 1)
         assert total == expected
         # وبأي ترتيب، نفس المجموع
@@ -372,12 +372,12 @@ def test_highlight_reaches_words_on_the_second_line(caps):
     """
     lay = CAP._layout(MULTILINE, caps, 1080)
     assert len(lay["lines"]) == 2
-    first_line_len = len(lay["lines"][0])
+    first_line_len = len(lay["texts"][0])
     tokens = MULTILINE.split()
 
     # كلمة من السطر الثاني بفهرسها المنطقي
     logical_index = first_line_len
-    assert tokens[logical_index] == lay["lines"][1][0]
+    assert tokens[logical_index] == lay["texts"][1][0]
     centre = highlight_centre(MULTILINE, caps, logical_index)
     assert centre > 0
 
@@ -395,7 +395,7 @@ def test_highlighted_word_is_on_the_expected_line(caps):
     """الفهرس المنطقي لازم يوقع على السطر الصح عموديًا كمان."""
     bare = dict(caps, box=[0, 0, 0, 0], color=[255, 255, 255])
     lay = CAP._layout(MULTILINE, caps, 1080)
-    first_line_len = len(lay["lines"][0])
+    first_line_len = len(lay["texts"][0])
     r, g, b = caps["highlight"]
 
     def rows(logical_index):
@@ -410,3 +410,243 @@ def test_highlighted_word_is_on_the_expected_line(caps):
     top_first = rows(0)[0]                       # كلمة من السطر الأول
     top_second = rows(first_line_len)[0]         # أول كلمة بالسطر الثاني
     assert top_second > top_first, "كلمة السطر الثاني انرسمت بمستوى الأول"
+
+
+# ================= EC-1: اتجاه الرسم والأقواس =================
+#
+# التوكن كان بينرسم معزول بـdirection="rtl" دايمًا، فالمحايد على طرفه
+# بياخد اتجاه القاعدة وبينعكس: `(Android` بتطلع `Android)`.
+
+def _mirrors(text, caps, size=74):
+    """هل شكل التوكن بيختلف بين رسمه rtl ورسمه ltr؟"""
+    from PIL import ImageChops
+    f = CAP._font(caps["font"], size)
+
+    def draw(d):
+        dd = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+        bb = dd.textbbox((0, 0), text, font=f, direction=d, language="ar")
+        im = Image.new("RGBA", (bb[2] - bb[0] + 8, bb[3] - bb[1] + 8), (0, 0, 0, 0))
+        ImageDraw.Draw(im).text((4 - bb[0], 4 - bb[1]), text, font=f,
+                                fill=(255, 255, 255, 255), direction=d, language="ar")
+        return im
+
+    a, b = draw("rtl"), draw("ltr")
+    if a.size != b.size:
+        return True
+    df = ImageChops.difference(a.convert("L"), b.convert("L"))
+    return sum(n for v, n in enumerate(df.histogram()) if v > 20) / (df.width * df.height) >= 0.005
+
+
+@needs_raqm
+@pytest.mark.parametrize("tok", ["(Android", "App)", "(Flutter", "Web)", "("])
+def test_unpaired_bracket_would_mirror_under_rtl(caps, tok):
+    """توثيق السبب: هدول التوكنات شكلها بيختلف حسب اتجاه الرسم."""
+    assert _mirrors(tok, caps), f"{tok!r} المفروض يتأثر بالاتجاه"
+
+
+@needs_raqm
+@pytest.mark.parametrize("tok", ["(A)", "[x]", "{y}", "iPhone", "2.5",
+                                 "https://ex.com/a?q=1", "مرحبا"])
+def test_these_tokens_are_direction_safe(caps, tok):
+    """الأقواس المزدوجة داخل التوكن بتتعاكس سوا فبينلغي الأثر."""
+    assert not _mirrors(tok, caps)
+
+
+@needs_raqm
+@pytest.mark.parametrize("tok,want", [
+    ("(Android", "L"), ("App)", "L"), ("(Flutter", "L"), ("Web)", "L"),
+    ("(Android)", "L"), ("(App", "L"), ("Store)", "L"),
+])
+def test_bracketed_latin_resolves_to_ltr(tok, want):
+    """اتجاه الرسم بيجي من هون — لازم يطلع L فينرسم ltr وما ينعكس."""
+    assert CAP._resolve_dirs([tok])[0] == want
+
+
+@needs_raqm
+@pytest.mark.parametrize("text", [
+    "حمّل التطبيق (Android App) الآن",
+    "(Flutter Web) شغال",
+    "افتح (App Store) هلأ",
+    "جرّب (Android) هلأ",
+    "قبل (Flutter) بعد",
+    "جرّب () [] {} هون",
+    "نتيجة (2.5) جاهزة",
+])
+def test_bracket_cases_match_raqm(caps, text):
+    """الترتيب — مكمّل للصور المرجعية اللي بتمسك الشكل."""
+    tokens = text.split()
+    got = visual_widths(tokens, CAP._bidi_runs(tokens), caps, 74)
+    ref = reference_widths(text, caps, 74)
+    assert matches(got, ref), f"عنا {got} · المرجع {ref}"
+
+
+@needs_raqm
+def test_draw_direction_comes_from_the_resolved_run(caps):
+    """
+    الاتجاه لازم ياخد المحايد المحلول مش `_token_dir` لحالها: قوس
+    لحاله بعد كلمة لاتينية بينضم للـrun فبينرسم ltr.
+    """
+    assert CAP._resolve_dirs(["Flutter", "(", "Dart"]) == ["L", "L", "L"]
+    assert CAP._resolve_dirs(["مرحبا", "(", "بعدين"]) == ["R", "R", "R"]
+
+
+# ================= CR-3: قيد العرض داخل _fit =================
+
+LONG_URL = ("https://sub.domain.example.com/a/very/long/path/segment/"
+            "that/cannot/possibly/wrap/anywhere")
+
+
+@needs_raqm
+@pytest.mark.parametrize("text", [
+    LONG_URL,
+    f"شوف {LONG_URL} هلأ",
+    "شوف https://example.com/extremely/long/path/segment/never/breaks?query=1&more=2",
+    "A" * 200,
+])
+def test_long_token_never_exceeds_the_frame(caps, text):
+    """
+    الانحدار (CR-3): `_fit` كانت تستسلم عند الأرضية وترجّع كل شي على
+    سطر واحد، فبينتج PNG أعرض من الإطار وffmpeg بيقصقصه — يعني باگ
+    «الكابشن مقصوص» بيرجع من الباب الخلفي.
+
+    العرض مضمون **بالبناء** هلأ، مش بتأكيد لاحق.
+    """
+    img = CAP.render_caption(text, caps, 1080)
+    assert img.width <= 1080, f"عرض الصورة {img.width} أكبر من الإطار"
+    assert img.width <= CAP.available_width(1080)
+
+
+@needs_raqm
+def test_long_token_is_split_not_dropped(caps):
+    """الكسر ما بيضيّع محارف — النص كامل موجود بالقطع."""
+    lay = CAP._layout(LONG_URL, caps, 1080)
+    joined = "".join(t for ln in lay["texts"] for t in ln)
+    assert joined == LONG_URL
+
+
+@needs_raqm
+def test_split_pieces_keep_one_logical_index(caps):
+    """كل قطع التوكن الواحد بتحمل نفس الفهرس — التلوين بيلوّنه كامل."""
+    lay = CAP._layout(f"شوف {LONG_URL} هلأ", caps, 1080)
+    idx = [li for ln in lay["lines"] for _, li in ln]
+    assert set(idx) == {0, 1, 2}
+    assert idx.count(1) > 1, "الرابط المفروض ينكسر لأكتر من قطعة"
+
+
+@needs_raqm
+def test_split_prefers_logical_break_points(caps):
+    """الكسر بعد `/` بيقرا أحسن من الكسر بنص كلمة."""
+    lay = CAP._layout(LONG_URL, caps, 1080)
+    pieces = [t for ln in lay["texts"] for t in ln]
+    assert sum(1 for p in pieces[:-1] if p[-1] in CAP._BREAK_AFTER) >= 1
+
+
+@needs_raqm
+def test_highlighting_a_split_token_colours_all_its_pieces(caps):
+    """التوكن المكسور لازم يتلوّن كامل، مش قطعة منه."""
+    text = f"شوف {LONG_URL} هلأ"
+    bare = dict(caps, box=[0, 0, 0, 0], color=[255, 255, 255])
+    img = CAP.render_caption(text, bare, 1080, highlight_idx=1).convert("RGB")
+    px = img.load()
+    r, g, b = caps["highlight"]
+    rows = {y for y in range(img.height) for x in range(0, img.width, 3)
+            if abs(px[x, y][0] - r) < 40 and abs(px[x, y][1] - g) < 40
+            and abs(px[x, y][2] - b) < 40}
+    lay = CAP._layout(text, caps, 1080)
+    n_lines_with_url = sum(1 for ln in lay["lines"] if any(li == 1 for _, li in ln))
+    assert n_lines_with_url > 1, "الحالة لازم توزّع الرابط على أسطر"
+    assert rows, "ما تلوّن ولا شي"
+
+
+@needs_raqm
+@pytest.mark.parametrize("tok", ["(Android", "App)", "(Flutter", "Web)"])
+def test_render_uses_the_run_direction_not_a_fixed_rtl(caps, tok):
+    """
+    ثغرة كشفتها المطافرة: كانت الفحوصات تتأكد إن `_resolve_dirs` بترجّع
+    'L' وإن التوكن حسّاس للاتجاه — بس ولا واحد بيتأكد إن **حلقة الرسم**
+    بتستعمل الاتجاه. رجوع `direction="rtl"` الثابت كان بيمرق.
+
+    هون بنرسم الكابشن فعليًا وبنطابق حبره بالرسم بالاتجاه الصح.
+    """
+    from PIL import ImageChops
+    f = CAP._font(caps["font"], caps["size"])
+    bare = dict(caps, box=[0, 0, 0, 0], color=[255, 255, 255])
+
+    def bare_draw(d):
+        dd = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+        bb = dd.textbbox((0, 0), tok, font=f, direction=d, language="ar")
+        im = Image.new("RGBA", (bb[2] - bb[0] + 2, bb[3] - bb[1] + 2), (0, 0, 0, 0))
+        ImageDraw.Draw(im).text((1 - bb[0], 1 - bb[1]), tok, font=f,
+                                fill=(255, 255, 255, 255), direction=d, language="ar")
+        return im.crop(im.split()[-1].getbbox())
+
+    got = CAP.render_caption(tok, bare, 1080)
+    got = got.crop(got.split()[-1].getbbox())
+
+    def diff(a, b):
+        if a.size != b.size:
+            return 1.0
+        d = ImageChops.difference(a.convert("L"), b.convert("L"))
+        return sum(n for v, n in enumerate(d.histogram()) if v > 20) / (d.width * d.height)
+
+    d_ltr, d_rtl = diff(got, bare_draw("ltr")), diff(got, bare_draw("rtl"))
+    assert d_ltr < d_rtl, (
+        f"{tok!r} انرسم بالاتجاه الغلط — القوس منعكس "
+        f"(فرق عن ltr={d_ltr:.3f} · عن rtl={d_rtl:.3f})")
+
+
+@needs_raqm
+def test_neutral_token_draws_with_its_resolved_direction(caps):
+    """
+    ثغرة تانية: الاتجاه لازم ياخد المحايد **المحلول**. لو أخدناه من
+    `_token_dir` لحالها، القوس اللي لحاله بيرجع 'N' وبينرسم rtl حتى لو
+    سياقه لاتيني.
+    """
+    txt = ["Flutter", "(", "Dart"]
+    assert CAP._resolve_dirs(txt) == ["L", "L", "L"]
+    assert [CAP._token_dir(t) for t in txt] == ["L", "N", "L"]
+
+
+@needs_raqm
+def test_neutral_in_a_latin_context_is_drawn_ltr(caps):
+    """
+    الثغرة الأخيرة اللي نجت من المطافرة: `_resolve_dirs` مقابل
+    `_token_dir` بيفرقوا **بس** عند التوكن المحايد. كل الفحوصات
+    المرسومة كانت على توكنات 'L'، فأخذ الاتجاه من `_token_dir` كان
+    يمرق.
+
+    القوس لحاله بسياق لاتيني لازم ينرسم ltr فما ينعكس.
+    """
+    from PIL import ImageChops
+    f = CAP._font(caps["font"], caps["size"])
+    bare = dict(caps, box=[0, 0, 0, 0], color=[255, 255, 255])
+
+    def glyph(d):
+        dd = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+        bb = dd.textbbox((0, 0), "(", font=f, direction=d, language="ar")
+        im = Image.new("RGBA", (bb[2] - bb[0] + 2, bb[3] - bb[1] + 2), (0, 0, 0, 0))
+        ImageDraw.Draw(im).text((1 - bb[0], 1 - bb[1]), "(", font=f,
+                                fill=(255, 255, 255, 255), direction=d, language="ar")
+        return im.crop(im.split()[-1].getbbox())
+
+    def diff(a, b):
+        if a.size != b.size:
+            return 1.0
+        x = ImageChops.difference(a.convert("L"), b.convert("L"))
+        return sum(n for v, n in enumerate(x.histogram()) if v > 20) / (x.width * x.height)
+
+    # القوس هو التوكن الأوسط، وبينرسم بموضعه البصري الأوسط كمان
+    img = CAP.render_caption("Flutter ( Dart", bare, 1080, highlight_idx=1)
+    px = img.convert("RGB").load()
+    r, g, b = caps["highlight"]
+    box = [(x, y) for y in range(img.height) for x in range(img.width)
+           if abs(px[x, y][0] - r) < 40 and abs(px[x, y][1] - g) < 40
+           and abs(px[x, y][2] - b) < 40]
+    assert box, "القوس ما تلوّن"
+    x0 = min(p[0] for p in box); x1 = max(p[0] for p in box)
+    y0 = min(p[1] for p in box); y1 = max(p[1] for p in box)
+    drawn = img.crop((x0, y0, x1 + 1, y1 + 1))
+
+    assert diff(drawn, glyph("ltr")) < diff(drawn, glyph("rtl")), (
+        "القوس المحايد بسياق لاتيني انرسم rtl فانعكس — "
+        "الاتجاه مأخوذ من `_token_dir` بدل المحلول")

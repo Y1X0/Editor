@@ -36,19 +36,34 @@ def test_empty_input():
 
 # ------------------------------------------------------------------ _wrap
 
+def items(*words):
+    """`_wrap` بتاخد (نص، فهرس منطقي) — الفهرس بينحمل مش بينحسب."""
+    return [(w, i) for i, w in enumerate(words)]
+
+
+def texts(lines):
+    return [[t for t, _ in ln] for ln in lines]
+
+
 def test_wrap_packs_greedily():
-    ws = ["aa", "bb", "cc"]
-    widths = [(100, 0)] * 3
-    assert CAP._wrap(ws, widths, 10, 210) == [["aa", "bb"], ["cc"]]
+    out = CAP._wrap(items("aa", "bb", "cc"), [(100, 0)] * 3, 10, 210)
+    assert texts(out) == [["aa", "bb"], ["cc"]]
 
 
 def test_wrap_gives_one_line_when_everything_fits():
-    assert CAP._wrap(["a", "b"], [(50, 0), (50, 0)], 10, 500) == [["a", "b"]]
+    out = CAP._wrap(items("a", "b"), [(50, 0), (50, 0)], 10, 500)
+    assert texts(out) == [["a", "b"]]
+
+
+def test_wrap_carries_the_logical_index(caps):
+    """الفهرس بيلزق بالقطعة — أساس صحة التلوين بعد الكسر."""
+    out = CAP._wrap(items("aa", "bb", "cc"), [(100, 0)] * 3, 10, 210)
+    assert [li for ln in out for _, li in ln] == [0, 1, 2]
 
 
 def test_wrap_refuses_when_a_single_word_is_too_wide():
-    """الرفض هو اللي بيخلي `_fit` تكمّل تصغير بدل ما تقصّ الكلمة."""
-    assert CAP._wrap(["hugeword"], [(900, 0)], 10, 400) is None
+    """بلا `f` بترجّع None فـ`_fit` بتكمّل تصغير بدل ما تقصّ."""
+    assert CAP._wrap(items("hugeword"), [(900, 0)], 10, 400) is None
 
 
 # ------------------------------------------------------------------- _fit
@@ -61,45 +76,50 @@ def test_wrap_refuses_when_a_single_word_is_too_wide():
     "الأنثروبولوجيا",
 ])
 def test_fit_never_exceeds_available_width(caps, text):
-    size, lines = CAP._fit(text.split(), caps["font"], caps["size"], W - 60)
+    size, lines = CAP._fit(text.split(), caps["font"], caps["size"],
+                           CAP.available_width(W))
     pad_x, _, gap = CAP._margins(size)
     f = CAP._font(caps["font"], size)
-    for ln in lines:
+    for ln in texts(lines):
         total = sum(w for w, _ in CAP._widths(ln, f)) + gap * (len(ln) - 1)
-        assert total <= (W - 60) - pad_x * 2
+        assert total <= CAP.available_width(W) - pad_x * 2
 
 
 @needs_raqm
 def test_fit_keeps_every_word(caps):
     text = "المسؤوليات الاستراتيجية والاستثمارات الاجتماعية بالمستشفيات"
-    _, lines = CAP._fit(text.split(), caps["font"], caps["size"], W - 60)
-    assert [w for ln in lines for w in ln] == text.split()
+    _, lines = CAP._fit(text.split(), caps["font"], caps["size"],
+                        CAP.available_width(W))
+    assert [w for ln in texts(lines) for w in ln] == text.split()
 
 
 @needs_raqm
 def test_fit_prefers_the_largest_size(caps):
     """ما في حجم أكبر من المختار بيسع بسطرين — وإلا الاختيار مش الأكبر."""
     text = "المسؤوليات الاستراتيجية والاستثمارات الاجتماعية بالمستشفيات"
-    size, _ = CAP._fit(text.split(), caps["font"], caps["size"], W - 60)
+    size, _ = CAP._fit(text.split(), caps["font"], caps["size"],
+                       CAP.available_width(W))
     if size < caps["size"]:
         bigger = size + 1
         f = CAP._font(caps["font"], bigger)
         pad_x, _, gap = CAP._margins(bigger)
-        lines = CAP._wrap(text.split(), CAP._widths(text.split(), f), gap,
-                          (W - 60) - pad_x * 2)
+        lines = CAP._wrap(items(*text.split()), CAP._widths(text.split(), f),
+                          gap, CAP.available_width(W) - pad_x * 2)
         assert lines is None or len(lines) > CAP._MAX_LINES
 
 
 @needs_raqm
 def test_fit_uses_one_line_when_it_fits_at_that_size(caps):
-    _, lines = CAP._fit("وبيعمل زوم عند كل".split(), caps["font"], caps["size"], W - 60)
+    _, lines = CAP._fit("وبيعمل زوم عند كل".split(), caps["font"],
+                        caps["size"], CAP.available_width(W))
     assert len(lines) == 1
 
 
 @needs_raqm
 def test_fit_respects_the_floor(caps):
     text = " ".join(["الاستراتيجية"] * 12)
-    size, _ = CAP._fit(text.split(), caps["font"], caps["size"], W - 60)
+    size, _ = CAP._fit(text.split(), caps["font"], caps["size"],
+                       CAP.available_width(W))
     assert size >= int(caps["size"] * CAP._HARD_MIN)
 
 

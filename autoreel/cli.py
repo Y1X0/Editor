@@ -122,7 +122,14 @@ def main():
 
         # التوقيتات بعد القص — دالة نقية من (words, segs)، فمشتركة بين
         # كل المقاسات. حسابها مرة بيضمن كمان إنها متطابقة بينهن.
-        w2 = C.remap_words(words, segs) if words else []
+        #
+        # المدد من `frame_plan` مش من `b-a`: ffmpeg بيرمّز عدد إطارات
+        # مش زمنًا، فالتوقيت المبني على `b-a` بينزاح عن الصورة بمقدار
+        # بيتراكم مع كل مقطع. `output.fps` مشترك ودهسه بتصدير مرفوض.
+        fps = root["output"]["fps"]
+        durations = [n / fps for n in C.frame_plan(segs, fps)]
+        w2 = C.remap_words(words, segs, durations=durations) if words else []
+        new_dur = sum(durations)
 
         # ---- لكل مقاس: كابشن جديد + ترميز ----
         what = "معاينة" if a.preview_frames else "تصدير"

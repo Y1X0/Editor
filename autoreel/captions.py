@@ -84,22 +84,68 @@ def _widths(words, f):
     return out
 
 
-def _wrap(words, widths, gap, avail):
+# حدود منطقية لكسر توكن طويل (رابط، مسار ملف). مرتّبة بالأفضلية:
+# الكسر بعد `/` بيقرا أحسن من الكسر بنص كلمة.
+_BREAK_AFTER = "/\\&?=_-.,:;"
+
+
+def _split_token(tok, f, avail):
     """
-    يوزّع الكلمات على أسطر بحيث ما يتعدّى أي سطر `avail`.
-    يرجّع None لو في كلمة لحالها أعرض من السطر — يعني لازم تصغير أكتر،
-    لأن قصّ الكلمة ممنوع.
+    يكسر توكنًا أعرض من السطر لقطع بتسع.
+
+    آخر ملجأ لما التصغير ما بيكفي — رابط طويل ما بينلف عند مسافة لأنه
+    ما فيه مسافات. بنكسر بعد `/` و`-` وأمثالهن أولًا لأنه بيقرا أحسن،
+    وبنكسر بأي مكان بس لما ما يكون في خيار.
+
+    بدون هالكسر `_fit` بتستسلم وبترجّع كل شي على سطر واحد مهما كان
+    عرضه، فبينتج PNG أعرض من إطار الفيديو وffmpeg بيقصقصه.
     """
-    lines, cur, cur_w = [], [], 0
-    for w, (wpx, _) in zip(words, widths):
-        if wpx > avail:
+    pieces, cur = [], ""
+    for ch in tok:
+        trial = cur + ch
+        if cur and _widths([trial], f)[0][0] > avail:
+            pieces.append(cur)
+            cur = ch
+        else:
+            cur = trial
+        # اكسر عند حد منطقي لو صرنا فوق نص السطر
+        if ch in _BREAK_AFTER and _widths([cur], f)[0][0] > avail * 0.5:
+            pieces.append(cur)
+            cur = ""
+    if cur:
+        pieces.append(cur)
+    return pieces or [tok]
+
+
+def _wrap(items, widths, gap, avail, f=None):
+    """
+    يوزّع التوكنات على أسطر بحيث ما يتعدّى أي سطر `avail`.
+
+    كل عنصر `(نص، فهرس منطقي)`. الفهرس بينحمل مع القطعة مش بينحسب من
+    موقعها — لأن كسر التوكن بيخلي عدد القطع أكتر من عدد الكلمات، وأي
+    حساب بالموقع بينكسر بصمت وقتها.
+
+    `f` معطى -> التوكن اللي ما بيسع بينكسر. `f=None` -> بترجّع None
+    (السلوك القديم: خلّي `_fit` تصغّر أكتر).
+    """
+    exploded = []
+    for (txt, li), (wpx, _) in zip(items, widths):
+        if wpx <= avail:
+            exploded.append((txt, li, wpx))
+            continue
+        if f is None:
             return None
+        for piece in _split_token(txt, f, avail):
+            exploded.append((piece, li, _widths([piece], f)[0][0]))
+
+    lines, cur, cur_w = [], [], 0
+    for txt, li, wpx in exploded:
         nxt = wpx if not cur else cur_w + gap + wpx
         if nxt > avail and cur:
             lines.append(cur)
-            cur, cur_w = [w], wpx
+            cur, cur_w = [(txt, li)], wpx
         else:
-            cur.append(w)
+            cur.append((txt, li))
             cur_w = nxt
     if cur:
         lines.append(cur)
@@ -114,16 +160,19 @@ def _fit(words, font_path, base_size, avail_outer):
     أقل بيفوز. تفضيل "أقل أسطر" بيتحقق لحاله: `_wrap` جشعة فبتعطي أقل
     عدد أسطر ممكن لكل حجم — لو النص بيسع بسطر واحد بترجّع سطر واحد.
 
-    آخر ملجأ عند الأرضية: بنقبل أي عدد أسطر. النص ما بينقصّ بأي مسار.
+    آخر ملجأ عند الأرضية: بنكسر التوكن الطويل ونقبل أي عدد أسطر.
+    **العرض مضمون بالبناء** — مش بتأكيد لاحق. النص ما بينقصّ بأي مسار.
 
-    يرجّع (size, lines).
+    يرجّع (size, lines) حيث كل سطر قائمة `(نص، فهرس منطقي)`.
     """
     hard = max(8, int(base_size * _HARD_MIN))
+    items = [(w, i) for i, w in enumerate(words)]
 
-    def try_size(size, max_lines):
+    def try_size(size, max_lines, split=False):
         f = _font(font_path, size)
         pad_x, _, gap = _margins(size)
-        lines = _wrap(words, _widths(words, f), gap, avail_outer - pad_x * 2)
+        avail = avail_outer - pad_x * 2
+        lines = _wrap(items, _widths(words, f), gap, avail, f=f if split else None)
         if lines is not None and len(lines) <= max_lines:
             return lines
         return None
@@ -133,10 +182,10 @@ def _fit(words, font_path, base_size, avail_outer):
         if lines:
             return size, lines
 
-    f = _font(font_path, hard)                    # الأرضية — لا نقصّ أبدًا
-    pad_x, _, gap = _margins(hard)
-    lines = _wrap(words, _widths(words, f), gap, avail_outer - pad_x * 2)
-    return hard, lines or [words]
+    # الأرضية: بنكسر التوكن اللي ما بيسع بدل ما نستسلم ونطلّع سطرًا
+    # أعرض من الإطار. الكسر أقبح من التصغير بس بيضل مقروءًا، والقصّ
+    # بحدود الفيديو مش مقروء.
+    return hard, try_size(hard, len(words) + 8, split=True)
 
 
 def _token_dir(tok):
@@ -151,6 +200,22 @@ def _token_dir(tok):
         if b == "L":
             return "L"
     return "N"
+
+
+def _resolve_dirs(tokens):
+    """
+    اتجاه كل توكن بعد حلّ المحايدات: 'L' أو 'R' — ولا 'N' بالمخرَج.
+
+    بتستعملها `_bidi_runs` للترتيب، وحلقة الرسم لاختيار
+    `direction` لكل توكن. المصدر واحد فما بيفترقوا.
+    """
+    dirs = []
+    for tok in tokens:
+        d = _token_dir(tok)
+        if d == "N":
+            d = "L" if dirs and dirs[-1] == "L" else "R"
+        dirs.append(d)
+    return dirs
 
 
 def _bidi_runs(tokens):
@@ -175,13 +240,7 @@ def _bidi_runs(tokens):
     if not tokens:
         return []
 
-    # ١) صنّف، وحلّ المحايدات حسب اللي قبلها
-    dirs = []
-    for tok in tokens:
-        d = _token_dir(tok)
-        if d == "N":
-            d = "L" if dirs and dirs[-1] == "L" else "R"
-        dirs.append(d)
+    dirs = _resolve_dirs(tokens)
 
     # ٢) اجمع المتجاورات بنفس الاتجاه بـrun واحد
     runs = []
@@ -242,11 +301,13 @@ def _layout(text, cfg, W):
     th, top = bb[3] - bb[1], bb[1]
     leading = int(size * 0.22)
 
-    per_line = [_widths(ln, f) for ln in lines]
+    texts = [[t for t, _ in ln] for ln in lines]
+    per_line = [_widths(tx, f) for tx in texts]
     totals = [sum(w for w, _ in ws) + gap * (len(ws) - 1) for ws in per_line]
 
     lay = {
-        "size": size, "lines": lines, "font": f, "per_line": per_line,
+        "size": size, "lines": lines, "texts": texts, "font": f,
+        "per_line": per_line,
         "totals": totals, "gap": gap, "pad_y": pad_y, "th": th, "top": top,
         "leading": leading,
         "w": max(totals) + pad_x * 2,
@@ -317,21 +378,29 @@ def render_caption(text, cfg, W, highlight_idx=None):
     #   logical_index = مكان التوكن بالنص، وهو اللي `highlight_idx` بيشير إله
     #   draw_position = مكان رسمه على الصورة من اليسار لليمين
     # بالعربي الخالص هدول معكوس بعض، وبالمختلط لا هيك ولا هيك.
-    line_start = 0                       # أول logical_index بهالسطر
+    #
+    # الفهرس المنطقي **بيجي مع العنصر** مش بينحسب من موقعه: كسر التوكن
+    # الطويل بيخلي عدد القطع أكتر من عدد الكلمات، فأي حساب بالموقع
+    # بينكسر بصمت.
     for li, ln in enumerate(lines):
         y = pad_y - top + li * (th + leading)
+        txt = lay["texts"][li]
+        dirs = _resolve_dirs(txt)
         # الترتيب البصري لهالسطر لحاله. run بينقسم على سطرين بينرتّب
         # داخل كل سطر — حد موثّق بـCLAUDE.md وعليه اختبار.
         x = (img_w - totals[li]) / 2      # من اليسار لليمين
-        for draw_position in _bidi_runs(ln):
-            logical_index = line_start + draw_position
+        for draw_position in _bidi_runs(txt):
+            piece, logical_index = ln[draw_position]
             wpx, ox = per_line[li][draw_position]
             col = (tuple(cfg["highlight"]) if logical_index == highlight_idx
                    else tuple(cfg["color"]))
-            dr.text((x - ox, y), ln[draw_position], font=f, fill=col + (255,),
-                    direction="rtl", language="ar")
+            # ⚠️ اتجاه الرسم من اتجاه الـrun مش ثابت "rtl". التوكن
+            # اللي بينرسم معزول بقاعدة RTL بتنعكس محايداته: `(Android`
+            # كانت تطلع `Android)` لأن القوس بياخد اتجاه القاعدة.
+            dr.text((x - ox, y), piece, font=f, fill=col + (255,),
+                    direction="ltr" if dirs[draw_position] == "L" else "rtl",
+                    language="ar")
             x += wpx + gap
-        line_start += len(ln)
     return img
 
 

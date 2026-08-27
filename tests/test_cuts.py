@@ -1,7 +1,8 @@
 """خطة القص وإعادة تخطيط التوقيتات — دوال نقية، بلا ffmpeg."""
 import pytest
 
-from autoreel.cuts import (dropped_words, remap_words, segments_from_words,
+from autoreel.cuts import (dropped_words, frame_plan, remap_words,
+                          segments_from_words,
                           total_after_cut)
 from conftest import words
 
@@ -182,3 +183,49 @@ def test_dropped_words_matches_remap_exactly():
 def test_dropped_words_keeps_source_order():
     w = words(("a", 0.0, 0.1), ("b", 1.0, 1.1), ("c", 2.0, 2.1))
     assert dropped_words(w, [(5.0, 6.0)]) == ["a", "b", "c"]
+
+
+# ------------------------------------------------------------ frame_plan
+
+def test_frame_plan_counts_frames_not_seconds():
+    assert frame_plan([(0.0, 1.0), (2.0, 3.37)], 30) == [30, 41]
+
+
+def test_frame_plan_never_returns_zero():
+    """مقطع أقصر من إطار لازم ياخد إطارًا واحدًا مش صفر."""
+    assert frame_plan([(0.0, 0.001)], 30) == [1]
+
+
+def test_remap_uses_the_durations_it_is_given():
+    """
+    ثغرة كشفتها المطافرة: ما كان في فحص يتأكد إن `durations` بتنستعمل
+    فعلًا. `offset += (b - a)` كان يمرق، وهو بالضبط الباگ CR-1 —
+    الكابشن موقّت على المخطط والفيديو مرمّز بمدة تانية.
+    """
+    w = words(("a", 0.1, 0.4), ("b", 5.1, 5.4))
+    segs = [(0.0, 1.0), (5.0, 6.0)]
+    plain = remap_words(w, segs)
+    scaled = remap_words(w, segs, durations=[2.0, 2.0])
+    assert plain[1]["start"] == pytest.approx(1.1)      # 1.0 + 0.1
+    assert scaled[1]["start"] == pytest.approx(2.2)     # 2.0 + 0.1*2
+
+
+def test_remap_scales_word_times_inside_a_stretched_segment():
+    """الكلمة جوا المقطع بتتمدّد معه — وإلا بتطلع برّا نهايته."""
+    w = words(("a", 0.0, 1.0))
+    out = remap_words(w, [(0.0, 1.0)], durations=[0.5])
+    assert out[0]["end"] == pytest.approx(0.5)
+
+
+def test_remap_offsets_come_from_frame_plan_in_practice():
+    """التكامل: بدايات المقاطع لازم تقع على شبكة الإطارات."""
+    segs = [(0.0, 1.017), (2.0, 3.049), (5.0, 6.083)]
+    fps = 30
+    durs = [n / fps for n in frame_plan(segs, fps)]
+    w = words(("a", 0.0, 0.2), ("b", 2.0, 2.2), ("c", 5.0, 5.2))
+    out = remap_words(w, segs, durations=durs)
+    starts = [x["start"] for x in out]
+    assert starts[1] == pytest.approx(durs[0])
+    assert starts[2] == pytest.approx(durs[0] + durs[1])
+    for s in starts:
+        assert abs(s * fps - round(s * fps)) < 1e-6, "بداية مش على شبكة الإطارات"

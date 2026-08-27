@@ -54,11 +54,20 @@ def test_sizes_do_not_leak_into_each_other(root):
 
 
 def test_scalars_replace_they_do_not_merge(root):
-    root["exports"]["square"]["motion"] = None            # هيبقى مرفوض تحت
-    root["exports"]["square"].pop("motion")
-    root["exports"]["square"]["output"]["fps"] = 24
-    c = X.resolve(root, "square")
-    assert c["output"]["fps"] == 24
+    root["exports"]["square"]["output"]["crf"] = 28
+    assert X.resolve(root, "square")["output"]["crf"] == 28
+
+
+@pytest.mark.parametrize("key", X.SHARED_KEYS["output"])
+def test_overriding_a_shared_key_is_rejected(root, key):
+    """
+    `output.fps` بيحدّد شبكة الإطارات اللي بينبني عليها توقيت الكابشن،
+    وهي محسوبة مرة وحدة لكل المقاسات. دهسها بتصدير بيخلي توقيت هداك
+    المقاس مبنيًا على شبكة تانية بلا ما يحس حدا.
+    """
+    root["exports"]["square"]["output"][key] = 24
+    with pytest.raises(ValueError, match=key):
+        X.resolve(root, "square")
 
 
 def test_list_override_replaces_whole_list(root):

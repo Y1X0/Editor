@@ -1,6 +1,8 @@
 """تجميع الفيديو النهائي: قص + زوم لكل مقطع + حرق الكابشن."""
 import subprocess, os, shlex
 
+from .cuts import frame_plan
+
 
 def preview(cmd):
     """الأمر كنص جاهز للصق بالترمنال."""
@@ -121,14 +123,18 @@ def build_base(src, segs, cfg, workdir, dry_run=False):
     الزوم ثابت داخل المقطع — هيك بيطلع الشكل المعروف بالريلز.
     """
     cycle = cfg["motion"]["zoom_cycle"] if cfg["motion"]["enabled"] else [1.0]
+    fps = cfg["output"]["fps"]
+    nframes = frame_plan(segs, fps)
 
     parts = []
-    for i, (a, b) in enumerate(segs):
+    for i, ((a, b), n) in enumerate(zip(segs, nframes)):
         z = cycle[i % len(cycle)]
         vf = segment_filter(cfg, zoom=z, pan_dir=(1 if i % 2 == 0 else -1))
         out = os.path.join(workdir, f"seg{i:04d}.mp4")
+        # `-frames:v` بدل `-to`: بيحدّد المدة بعدد إطارات بدل زمن
+        # بيقرّبه ffmpeg كيف ما بده. شوف `cuts.frame_plan` للقياس.
         run(["ffmpeg", "-y", "-loglevel", "error",
-             "-ss", f"{a:.3f}", "-to", f"{b:.3f}", "-i", src,
+             "-ss", f"{a:.3f}", "-i", src, "-frames:v", str(n),
              "-vf", vf, "-c:v", "libx264", "-crf", str(cfg["output"]["crf"]),
              "-preset", "veryfast", "-pix_fmt", "yuv420p",
              "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2",

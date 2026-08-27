@@ -82,11 +82,30 @@ def test_one_encode_per_segment_plus_one_concat(tmp_path, full_cfg, capsys):
     assert arg(c[-1], "-f") == "concat"
 
 
-def test_segment_bounds_reach_ffmpeg(tmp_path, full_cfg, capsys):
+def test_segment_start_reaches_ffmpeg(tmp_path, full_cfg, capsys):
+    R.build_base("in.mp4", [(1.25, 3.5)], full_cfg, str(tmp_path), dry_run=True)
+    assert arg(cmds(capsys)[0], "-ss") == "1.250"
+
+
+def test_segment_length_is_a_frame_count_not_a_time(tmp_path, full_cfg, capsys):
+    """
+    الانحدار (CR-1): `-to` بيخلي ffmpeg يقرّر عدد الإطارات، والمقاس
+    طلع +112ms على ٥ مقاطع. `-frames:v` بينقل القرار لعنا.
+    """
+    fps = full_cfg["output"]["fps"]
     R.build_base("in.mp4", [(1.25, 3.5)], full_cfg, str(tmp_path), dry_run=True)
     c = cmds(capsys)[0]
-    assert arg(c, "-ss") == "1.250"
-    assert arg(c, "-to") == "3.500"
+    assert "-to" not in c, "لسا بيعتمد على الزمن"
+    assert arg(c, "-frames:v") == str(round((3.5 - 1.25) * fps))
+
+
+def test_frame_counts_match_the_plan(tmp_path, full_cfg, capsys):
+    from autoreel.cuts import frame_plan
+    segs = [(0.0, 1.0), (2.0, 3.37), (5.0, 6.123)]
+    fps = full_cfg["output"]["fps"]
+    R.build_base("in.mp4", segs, full_cfg, str(tmp_path), dry_run=True)
+    got = [int(arg(c, "-frames:v")) for c in cmds(capsys) if "-frames:v" in c]
+    assert got == frame_plan(segs, fps)
 
 
 def test_crop_matches_configured_output_size(tmp_path, full_cfg, capsys):

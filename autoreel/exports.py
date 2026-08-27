@@ -10,6 +10,12 @@ import copy
 # بتصدير بيوهم إنه إله أثر وهو ما إله.
 SHARED = ("cuts", "motion")
 
+# مفاتيح مشتركة داخل أقسام قابلة للدهس. `output.fps` بيحدّد شبكة
+# الإطارات اللي بينبني عليها توقيت الكابشن (`cuts.frame_plan`)،
+# وهو محسوب **مرة وحدة** لكل المقاسات. دهسه بتصدير بيخلي توقيت هداك
+# المقاس مبنيًا على شبكة تانية بلا ما يحس حدا.
+SHARED_KEYS = {"output": ("fps",)}
+
 
 def names(cfg):
     """أسماء التصديرات المعرَّفة، بترتيب الconfig."""
@@ -43,6 +49,11 @@ def resolve(cfg, name):
         if section not in cfg:
             raise KeyError(
                 f"التصدير {name!r} بيدهس قسم مش موجود بالجذر: {section!r}")
+        for k in SHARED_KEYS.get(section, ()):
+            if isinstance(over, dict) and k in over:
+                raise ValueError(
+                    f"التصدير {name!r} بيدهس {section}.{k!r}، وهاد بيحدّد "
+                    f"توقيت الكابشن لكل المقاسات — عدّله بجذر الconfig")
         if isinstance(over, dict) and isinstance(out.get(section), dict):
             out[section].update(copy.deepcopy(over))
         else:

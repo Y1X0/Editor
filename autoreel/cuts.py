@@ -38,14 +38,21 @@ def segments_from_words(words, duration, min_gap=0.45, pad=0.10, min_seg=0.35):
     return merged or [(0.0, duration)]
 
 
-def remap_words(words, segs, min_ratio=0.45):
+def remap_words(words, segs, min_ratio=0.45, durations=None):
     """
     بعد القص بتتغير التوقيتات. هاي بترجّع الكلمات بتوقيت الفيديو الجديد،
     وبتشيل الكلمات اللي وقعت جوا الأجزاء المحذوفة.
 
     `min_ratio`: أقل نسبة من مدة الكلمة لازم تنجى من القص حتى تضل.
     بتنحسب **تراكميًا عبر كل المقاطع**، مش لكل مقطع لحاله.
+
+    `durations`: المدة **الفعلية** لكل مقطع بعد الترميز (من
+    `frame_plan`، يعني `N/fps`). بدونها بنستعمل `b-a` وهاد بيفترض إن
+    ffmpeg بيرمّز المدة المطلوبة بالضبط — وهو ما بيعملها. النتيجة إن
+    الكابشن بينزاح عن الصورة بمقدار بيتراكم مع كل مقطع.
     """
+    if durations is None:
+        durations = [b - a for a, b in segs]
     # تمريرة أولى للمجموع. القياس لكل مقطع لحاله كان بيرمي كلمة موزّعة
     # ٤٣٪/٢٩٪ على مقطعين رغم إنها ٧٢٪ حاضرة — وهي بالضبط حالة الكلمة
     # اللي على حد القص اللي العتبة موجودة عشان تحميها.
@@ -55,14 +62,17 @@ def remap_words(words, segs, min_ratio=0.45):
         kept.append(ov / max(1e-6, w["end"] - w["start"]) >= min_ratio)
 
     out, offset, prev_i = [], 0.0, None
-    for a, b in segs:
+    for (a, b), seg_dur in zip(segs, durations):
+        # المقطع بينرمّز بمدة `seg_dur` مش `b-a`. الكلمة جوا المقطع
+        # بتنقص لهالمدة، وإلا كابشن آخر كلمة بيمتد برّا المقطع.
+        scale = seg_dur / max(1e-9, b - a)
         for i, w in enumerate(words):
             # تداخل جزئي كافي — مش شرط الكلمة تكون كاملة جوا المقطع،
             # وإلا بتضيع الكلمات اللي على حدود القص.
             if not kept[i] or min(w["end"], b) - max(w["start"], a) <= 0:
                 continue
-            s = max(w["start"], a) - a + offset
-            e = min(w["end"], b) - a + offset
+            s = (max(w["start"], a) - a) * scale + offset
+            e = (min(w["end"], b) - a) * scale + offset
             # نفس الكلمة المصدرية انقسمت بين مقطعين -> مدّدها بدل ما
             # تكرّرها. المقارنة بالفهرس مش بالنص: «لا لا» كلمتين
             # حقيقيتين، والمقارنة النصية كانت بتصهرهن بوحدة.
@@ -75,8 +85,30 @@ def remap_words(words, segs, min_ratio=0.45):
             else:
                 out.append({"word": w["word"], "start": s, "end": e})
             prev_i = i
-        offset += (b - a)
+        offset += seg_dur
     return out
+
+
+def frame_plan(segs, fps):
+    """
+    عدد الإطارات لكل مقطع — الوحدة اللي بتحكم التوقيت فعليًا.
+
+    **ليش الإطارات مش الثواني:** ffmpeg ما بيضمن مدة المقطع لما تعطيه
+    أزمانًا. قياس على ٥ مقاطع (المطلوب 7.428s):
+
+        -ss a -to b            -> 226 إطار = 7.533s   (+112ms)
+        تقريب -ss/-to للشبكة   -> 222 إطار = 7.400s   (−28ms)
+        -ss a + -frames:v N    -> 223 إطار = 7.433s   (+5ms)
+
+    تقريب الأزمان بيقلب الخطأ من زيادة لنقصان بس ما بيصفّره — لأن
+    القرار النهائي لعدد الإطارات عند ffmpeg مش عنا. `-frames:v N`
+    بينقل القرار لعنا: N إطار بالضبط، و`concat -c copy` بيحافظ على
+    المجموع (متحقَّق: 223 = 223).
+
+    فالتوقيت الجديد للكابشن بينبني من الإطارات التراكمية، وبهيك
+    الخطة والمرمَّز بيتفقوا **بالتعريف** مش بالتقريب.
+    """
+    return [max(1, round((b - a) * fps)) for a, b in segs]
 
 
 def dropped_words(words, segs, min_ratio=0.45):
