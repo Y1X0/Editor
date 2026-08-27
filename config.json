@@ -53,7 +53,39 @@
   "sfx": {
     "enabled": false,
     "min_gap": 0.12,
-    "speech_gain": 0.7
+    "speech_gain": 0.7,
+    "events": {
+      "start": {
+        "asset": "impact",
+        "gain": 0.3,
+        "enabled": true
+      },
+      "finale": {
+        "asset": "riser",
+        "gain": 0.22,
+        "enabled": true
+      },
+      "cut": {
+        "asset": "whoosh",
+        "gain": 0.22,
+        "enabled": true
+      },
+      "zoom": {
+        "asset": "whoosh",
+        "gain": 0.18,
+        "enabled": true
+      },
+      "caption": {
+        "asset": "pop",
+        "gain": 0.25,
+        "enabled": true
+      },
+      "word": {
+        "asset": "tick",
+        "gain": 0.12,
+        "enabled": false
+      }
+    }
   },
   "exports": {
     "reel": {},

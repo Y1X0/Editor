@@ -160,6 +160,10 @@ def main():
                 plan, fps,
                 zooms=G.zoom_values(root, len(plan)),
                 caption_frames=[round(g["start"] * fps) for g in groups],
+                # `word` مطفي افتراضيًا، بس لازم يوصل: مفتاح بالconfig
+                # ما بيغيّر شي هو مفتاح ميت — ونفس القاعدة اللي فرضت
+                # `test_config_wiring` من الأساس.
+                word_frames=[round(w["start"] * fps) for w in w2],
                 cfg={**scfg, "enabled": True})
             SFX.assert_within(cues, sum(plan))
             if cues:

@@ -14,6 +14,7 @@
 """
 import copy
 import json
+import os
 
 import pytest
 
@@ -69,7 +70,7 @@ def test_no_dead_keys_left_behind(raw):
         "captions.enabled", "captions.font", "captions.size",
         "captions.max_words", "captions.color", "captions.highlight",
         "captions.box", "captions.y_ratio",
-        "sfx.enabled", "sfx.min_gap", "sfx.speech_gain",
+        "sfx.enabled", "sfx.min_gap", "sfx.speech_gain", "sfx.events",
         "exports",
     }
     actual = set()
@@ -303,3 +304,93 @@ def test_sfx_speech_gain_is_wired(cfg):
     assert "volume=0.7000[spk]" in _sfx_graph(on)
     assert "volume=0.5000[spk]" in _sfx_graph(
         bumped(on, ["sfx", "speech_gain"], 0.5))
+
+
+# ------------------------------------------- sfx.events (خريطة الأحداث)
+
+def test_the_config_defines_every_event_type(raw):
+    """
+    **الconfig هو مصدر الخريطة.** لازم يغطّي كل نوع بـ`PRIORITY` —
+    نوع ناقص بيعني إن الكود بيرجع لجدوله الاحتياطي بصمت، وبيصير
+    مصدران للحقيقة.
+    """
+    from autoreel import sfx as SFX
+    ev = raw["sfx"]["events"]
+    assert set(ev) == set(SFX.PRIORITY), \
+        f"ناقص/زايد: {set(SFX.PRIORITY) ^ set(ev)}"
+    for kind, spec in ev.items():
+        assert set(spec) == {"asset", "gain", "enabled"}, f"{kind}: {spec}"
+
+
+def test_every_asset_named_in_the_config_exists(raw):
+    from autoreel import render as R
+    for kind, spec in raw["sfx"]["events"].items():
+        assert os.path.isfile(R.sfx_asset(spec["asset"])), kind
+
+
+def test_changing_an_asset_in_the_config_changes_the_graph(cfg):
+    """الطفرة: بدّل أصل حدث بالconfig — لازم المخرَج يتبدّل."""
+    on = bumped(cfg, ["sfx", "enabled"], True)
+    base = _sfx_graph(on)
+    swapped = copy.deepcopy(on)
+    swapped["sfx"]["events"]["caption"]["asset"] = "tick"
+    other = _sfx_graph(swapped)
+    assert base != other, "تبديل الأصل ما غيّر الرسم"
+
+    from autoreel import graph as G, sfx as SFX
+    cues = SFX.plan_cues([60, 75, 60, 45], 30, zooms=[1.0, 1.1, 1.2, 1.0],
+                         caption_frames=[40, 100], cfg=swapped["sfx"])
+    assert {c.asset for c in cues if c.kind == "caption"} == {"tick"}
+
+
+def test_changing_a_gain_in_the_config_changes_the_graph(cfg):
+    on = bumped(cfg, ["sfx", "enabled"], True)
+    louder = copy.deepcopy(on)
+    louder["sfx"]["events"]["caption"]["gain"] = 0.11
+    assert "volume=0.1100" in _sfx_graph(louder)
+    assert "volume=0.1100" not in _sfx_graph(on)
+
+
+def test_disabling_one_event_type_removes_only_its_cues(cfg):
+    from autoreel import sfx as SFX
+    on = copy.deepcopy(bumped(cfg, ["sfx", "enabled"], True))
+    args = dict(zooms=[1.0, 1.1, 1.2, 1.0], caption_frames=[40, 100, 150])
+    before = SFX.plan_cues([60, 75, 60, 45], 30, cfg=on["sfx"], **args)
+    on["sfx"]["events"]["caption"]["enabled"] = False
+    after = SFX.plan_cues([60, 75, 60, 45], 30, cfg=on["sfx"], **args)
+    assert {c.kind for c in before} > {c.kind for c in after}
+    assert "caption" not in {c.kind for c in after}
+    assert {c.kind for c in after}, "انطفوا كلهن — الفحص فقد معناه"
+
+
+def test_the_word_event_is_reachable_from_the_config(cfg):
+    """
+    `word` مطفي افتراضيًا، **بس لازم يشتغل لما ينتشغّل**. مفتاح
+    بالconfig ما بيغيّر شي هو مفتاح ميت — ونفس القاعدة اللي فرضت
+    هالملف من الأساس.
+    """
+    from autoreel import sfx as SFX
+    on = copy.deepcopy(bumped(cfg, ["sfx", "enabled"], True))
+    on["sfx"]["events"]["word"]["enabled"] = True
+    cues = SFX.plan_cues([600], 30, word_frames=[100, 200, 300],
+                         cfg=on["sfx"])
+    assert "word" in {c.kind for c in cues}, "`word` مفتاح ميت"
+
+
+def test_no_event_to_asset_mapping_lives_outside_sfx_py():
+    """
+    حارس ضد مصدر حقيقة تاني: أسماء الأصول ما بتنكتب بأي ملف إنتاج
+    غير `sfx.py` (وهو الاحتياطي الموثّق).
+    """
+    import ast
+    root = os.path.join(ROOT, "autoreel")
+    names = {"whoosh", "pop", "impact", "tick", "riser"}
+    bad = []
+    for f in sorted(os.listdir(root)):
+        if not f.endswith(".py") or f == "sfx.py":
+            continue
+        tree = ast.parse(open(os.path.join(root, f), encoding="utf-8").read())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and node.value in names:
+                bad.append(f"{f}:{node.lineno} -> {node.value!r}")
+    assert not bad, "ربط حدث->أصل برّا sfx.py:\n" + "\n".join(bad)

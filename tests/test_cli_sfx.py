@@ -115,3 +115,54 @@ def test_each_distinct_asset_is_opened_exactly_once(src, tmp_path):
     assert assets, "ولا أصل انمرّر للأمر"
     assert len(assets) == len(set(assets)), \
         f"أصل انفتح أكتر من مرة: {assets}"
+
+
+def test_the_config_event_map_reaches_the_real_command(src, tmp_path):
+    """
+    **المتطلّب ٥:** `cli -> plan -> render -> الأمر` بيستعمل خريطة
+    الconfig نفسها، بلا إعادة بناء منطق الاختيار.
+
+    الفحص على الأمر المطبوع: بدّل أصل حدث بالconfig، ولازم الأصل
+    الجديد يظهر بمدخلات ffmpeg والقديم يختفي.
+    """
+    a_out = str(tmp_path / "a.mp4")
+    r = _run(src, a_out, extra=("--sfx", "--dry-run"))
+    before = {os.path.basename(w) for w in r.stdout.split()
+              if "assets/sfx/" in w}
+    assert "pop.wav" in before, before
+
+    b_out = str(tmp_path / "b.mp4")
+    r2 = _run(src, b_out, extra=("--sfx", "--dry-run"),
+              cfg_patch={"events": {"caption": {"asset": "tick",
+                                                "gain": 0.25,
+                                                "enabled": True}}})
+    after = {os.path.basename(w) for w in r2.stdout.split()
+             if "assets/sfx/" in w}
+    assert "tick.wav" in after, after
+    assert "pop.wav" not in after, f"الأصل القديم لسا موجود: {after}"
+
+
+def test_a_gain_change_in_the_config_reaches_the_filter_graph(src, tmp_path):
+    out = str(tmp_path / "g.mp4")
+    r = _run(src, out, extra=("--sfx", "--dry-run"),
+             cfg_patch={"events": {"caption": {"asset": "pop",
+                                               "gain": 0.11,
+                                               "enabled": True}}})
+    graph = "\n".join(l for l in r.stdout.splitlines() if "adelay=" in l)
+    assert "volume=0.1100" in graph, graph[-600:]
+
+
+def test_enabling_word_in_the_config_reaches_the_output(src, tmp_path):
+    """
+    **`word` كان مفتاحًا ميتًا.** `plan_cues` بتقبل `word_frames` بس
+    `cli` ما كانت بتمرّرهن، فتشغيل `word` بالconfig ما بيعمل شي —
+    والتشغيلة بتنجح. طفّرنا التمرير وما فشل ولا فحص، لأن `word` مطفي
+    افتراضيًا فما في سيناريو بيمرق من هون.
+    """
+    out = str(tmp_path / "w.mp4")
+    r = _run(src, out, extra=("--sfx", "--dry-run"),
+             cfg_patch={"events": {"word": {"asset": "tick", "gain": 0.12,
+                                            "enabled": True}}})
+    assets = {os.path.basename(w) for w in r.stdout.split()
+              if "assets/sfx/" in w}
+    assert "tick.wav" in assets, f"`word` ما وصل للمخرَج: {assets}"
