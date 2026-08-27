@@ -4,8 +4,7 @@ from . import (transcribe as T, cuts as C, captions as CAP, render as R,
                exports as X)
 
 
-def _one_export(name, cfg, src, segs, w2, out_path, work, a, multi,
-                src_info=None):
+def _one_export(name, cfg, src, segs, w2, out_path, work, a, src_info=None):
     """
     تصدير مقاس واحد. بيرجّع سطر ملخّص.
 
@@ -146,7 +145,7 @@ def main():
             os.makedirs(os.path.join(work, name), exist_ok=True)
             try:
                 rows.append(_one_export(name, cfg, a.input, segs, w2,
-                                        out_path, work, a, multi,
+                                        out_path, work, a,
                                         src_info=src_info))
             except Exception as e:
                 # فشل مقاس ما بيوقف الباقي — بس كود الخروج بيصير ≠ ٠.

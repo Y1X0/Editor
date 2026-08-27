@@ -1,5 +1,5 @@
 """بناء خطة القص من توقيتات الكلمات (أدق من silencedetect لفيديو الكلام)."""
-import subprocess, json, re
+import subprocess, json
 
 
 def probe_duration(path):
@@ -130,12 +130,3 @@ def dropped_words(words, segs, min_ratio=0.45):
 def total_after_cut(segs):
     return sum(b - a for a, b in segs)
 
-
-def parse_silencedetect(path, noise="-32dB", d=0.4):
-    """بديل احتياطي لو ما في تفريغ صوتي — كشف صمت مباشر من الصوت."""
-    r = subprocess.run(
-        ["ffmpeg", "-i", path, "-af", f"silencedetect=noise={noise}:d={d}",
-         "-f", "null", "-"], capture_output=True, text=True)
-    starts = [float(x) for x in re.findall(r"silence_start: ([\d.]+)", r.stderr)]
-    ends = [float(x) for x in re.findall(r"silence_end: ([\d.]+)", r.stderr)]
-    return list(zip(starts, ends))
