@@ -6,11 +6,21 @@
 
     E1 لازم يفشل   ← CR-4 (إطار زيادة)
     E2 لازم يفشل   ← انزياح AAC المتراكم
+    E7 لازم يفشل   ← CR-5 (تكرار أول إطار بكل مقطع)
+    E3 لازم يفشل   ← الكابشن مزحلق إطارًا
     E8 لازم ينجح   ← الزوم لكل مقطع شغّال اليوم
 
-اختبار ما شفناه بيفشل مش اختبار. `test_e1_and_e2_fail_today` تحت بيثبّت
-هالشرط: لو صار E1 أو E2 يمرقوا على المعمارية القديمة، الاختبار **هو**
-اللي بينكسر — يعني حدا فقّع أسنانهن.
+اختبار ما شفناه بيفشل مش اختبار.
+`test_the_baseline_really_is_broken_in_the_ways_we_claim` بيثبّت هالشرط:
+لو صار واحد منهن يمرق على المعمارية القديمة، **هو** اللي بينكسر — يعني
+يا الخلل انصلّح يا الفحص فقد أسنانه.
+
+**CR-4 وCR-5 مؤجّلين لإعادة التصميم بقرار مسجَّل** (شوف `ISSUES.md`):
+الاتنين بينتهوا معماريًا — الكابشن المفهرس بالإطار بيلغي تمريرات الحرق
+اللي بتضيف الإطار، و`select` بفهرس الإطار بتلغي seek برّا الشبكة.
+تصليحهن هلأ منفصلين = منطق مؤقت بينشال بعد مرحلتين، وخسارة القدرة على
+إثبات إن إعادة التصميم هي اللي أصلحتهن. الشرط المقابل: بعد المرحلة ٥
+لازم ينجحوا بلا أي `xfail` ولا تخفيف عتبة.
 
 كلها `slow`: ترميز ffmpeg حقيقي.
 """
@@ -349,16 +359,27 @@ def test_the_baseline_really_is_broken_in_the_ways_we_claim(run, frames_dir):
     الأصلي يحرسه) أو إن الفحص المقابل فقد أسنانه — والتاني بيمرق بصمت
     وهو الأخطر.
     """
-    # CR-4: إطار زيادة على الخطة
+    # CR-4: إطار **واحد** زيادة على الخطة — مش أي فرق
     got = count_frames(run["out"])
-    assert got != run["total"], (
-        f"E1 مرق على الكود القديم ({got}={run['total']}) — CR-4 انصلّح أو "
-        f"الفحص فقد أسنانه")
+    assert got - run["total"] == 1, (
+        f"بصمة CR-4 اتغيّرت: المخرَج {got} والمخطط {run['total']} "
+        f"(فرق {got - run['total']:+d}، المتوقَّع +1). يا إما انصلّح، يا إما "
+        f"صار في خلل تاني فوقه — الاتنين بدهن قرار مش تجاهل")
 
-    # CR-5: أول إطار بكل مقطع مكرر (والمقطع بيعرض إطارًا أقل من الخطة)
+    # CR-5: التكرار **بأول إطار** من كل مقطع، مش أي مكان
     ids = read_identities(frames_dir)
-    dups = [i for i in range(1, len(ids)) if ids[i] == ids[i - 1]]
-    assert dups, "E7 مرق على الكود القديم — CR-5 انصلّح أو الفحص فقد أسنانه"
+    assert ids.count(None) == 0, "إطار ما انقرا رقمه — البصمة مش موثوقة"
+    dup_at = [i for i in range(1, len(ids)) if ids[i] == ids[i - 1]]
+    assert dup_at, "E7 مرق على الكود القديم — CR-5 انصلّح أو الفحص فقد أسنانه"
+    starts = {0} | {i for i in range(1, len(ids))
+                    if ids[i] - ids[i - 1] not in (0, 1)}
+    for i in dup_at:
+        # التكرار بيجي مباشرة بعد بداية مقطع (أو بعد تكرار سابق بنفس البداية)
+        j = i
+        while j - 1 in dup_at:
+            j -= 1
+        assert j - 1 in starts or j - 1 == 0, (
+            f"تكرار بالموقع {i} مش عند بداية مقطع — بصمة CR-5 اتغيّرت")
 
     # الانزياح الصوتي المتراكم
     clicks = click_times(run["out"])
@@ -385,9 +406,12 @@ def test_cr5_first_frame_of_every_segment_is_duplicated(run, frames_dir,
     المحتوى. E7 وحده بيمسكه.
     """
     ids = read_identities(frames_dir)
-    per_seg = []
-    for a, b in observed_bounds:
-        seg = ids[a:b]
-        per_seg.append((len(seg), len(set(seg))))
+    per_seg = [(len(ids[a:b]), len(set(ids[a:b]))) for a, b in observed_bounds]
     assert all(d < n for n, d in per_seg), (
         f"توقّعنا تكرارًا بكل مقطع، لقينا {per_seg}")
+    # كل مقطع بيخسر إطار محتوى **على الأقل** — هاد الأثر الحقيقي، مش التكرار
+    assert all(n - d >= 1 for n, d in per_seg)
+    # والتكرار عند أول إطار: seg[0] == seg[1]
+    for a, b in observed_bounds:
+        assert ids[a] == ids[a + 1], (
+            f"مقطع بيبلّش {a}: التكرار مش عند أول إطار ({ids[a:a+3]})")
