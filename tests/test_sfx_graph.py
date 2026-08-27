@@ -195,8 +195,13 @@ def rendered(tmp_path_factory):
         args += ["-filter_complex_script", gp, "-map", f"[{v}]", "-map", f"[{al}]",
                  "-c:v", "libx264", "-crf", "23", "-preset", "veryfast",
                  "-pix_fmt", "yuv420p", "-c:a", acodec]
+        # **`-ac 2` على التشغيلتين** — زي ما بيعمل الإنتاج بالضبط.
+        # بدونها المرجع بيطلع مونو والمزيج ستيريو، والمقارنة بينهن
+        # عبر مسبار بيخفض لمونو بتخترع معامل ١/√٢ **مش موجود بالرسم**.
+        # صار معنا: "كسب الكلام ٠.٤٩٥" وطلع خلل قياس مش إنتاج.
+        args += ["-ac", "2"]
         if acodec == "aac":
-            args += ["-b:a", "128k", "-ar", str(SR), "-ac", "2"]
+            args += ["-b:a", "128k", "-ar", str(SR)]
         subprocess.run(args + [out], check=True, capture_output=True)
         return out
 
@@ -379,4 +384,68 @@ def test_speech_is_preserved_up_to_one_constant_gain(rendered):
     spread = max(ratios) - min(ratios)
     assert spread < 0.01, \
         f"النسبة مش ثابتة (مدى {spread:.4f}) — تشويه أو تنفّس أو إزاحة"
-    assert 0.3 < sum(ratios) / len(ratios) < 1.01
+
+    # والثابت هو **كسب الكلام المطلوب بالضبط**، مش أي رقم.
+    mean = sum(ratios) / len(ratios)
+    assert abs(mean - G.DEFAULT_SPEECH_GAIN) < 0.01, \
+        f"كسب الكلام {mean:.4f} بدل {G.DEFAULT_SPEECH_GAIN}"
+
+
+def test_the_speech_level_is_the_same_for_mono_and_stereo_sources(tmp_path):
+    """
+    **الخيار (أ):** مستوى الكلام الواصل ثابت عند الهدف مهما كان شكل
+    المصدر. مقيس على الاتنين عبر نفس المسار: ٠.٦٩٩٩ (مونو) و٠.٧٠٠٠
+    (ستيريو).
+
+    ما في تعويض ولا ضرب بـ√٢: الرسم صحيح أصلًا، والفرق اللي ظهر
+    بالمرحلة ٤ كان **خلل قياس** — مرجع مونو مقابل مزيج ستيريو.
+    """
+    if not ffmpeg_available():
+        pytest.skip("ffmpeg مش موجود")
+    src = build_source(tmp_path, width=320, height=568, fps=FPS, nframes=420)
+    stereo = str(tmp_path / "stereo.mkv")
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", src["path"],
+                    "-c:v", "copy", "-af", "pan=stereo|c0=c0|c1=c0",
+                    "-c:a", "pcm_s16le", stereo], check=True, capture_output=True)
+
+    plan = C.frame_plan(SEGS, FPS)
+    starts = G.start_frames(SEGS, FPS)
+    cues = [X.Cue(f, X.frame_to_sample(f, FPS), "caption", "pop", 0.25)
+            for f in (40, 120, 200)]
+    touched = _touched(cues)
+
+    def one(path, tag):
+        outs = {}
+        for on in (False, True):
+            g, maps = G.build_graph(SCFG, plan, starts, [("reel", SCFG)], 320, 568,
+                                    cues=cues if on else None,
+                                    sfx_inputs={"pop": 1} if on else None)
+            gp = str(tmp_path / f"g_{tag}.txt")
+            open(gp, "w", encoding="utf-8").write(g)
+            args = ["ffmpeg", "-y", "-loglevel", "error", "-i", path]
+            if on:
+                args += ["-i", S.asset("pop")]
+            _, v, al = maps[0]
+            o = str(tmp_path / f"{tag}_{on}.mkv")
+            subprocess.run(args + ["-filter_complex_script", gp,
+                                   "-map", f"[{v}]", "-map", f"[{al}]",
+                                   "-c:v", "libx264", "-crf", "23",
+                                   "-preset", "veryfast", "-pix_fmt", "yuv420p",
+                                   "-c:a", "pcm_s16le", "-ac", "2", o],
+                           check=True, capture_output=True)
+            outs[on] = o
+        a, b = S.pcm(outs[False]), S.pcm(outs[True])
+        clean = [i for i in range(min(len(a), len(b)))
+                 if i not in touched and abs(a[i]) > 0.05]
+        assert len(clean) > 50
+        r = sorted(b[i] / a[i] for i in clean)
+        return r[len(r) // 2], S.clipped(outs[True])
+
+    g_mono, clip_mono = one(src["path"], "mono")
+    g_stereo, clip_stereo = one(stereo, "stereo")
+    target = G.DEFAULT_SPEECH_GAIN
+    assert abs(g_mono - target) < 0.01, f"مونو {g_mono:.4f} ≠ {target}"
+    assert abs(g_stereo - target) < 0.01, f"ستيريو {g_stereo:.4f} ≠ {target}"
+    assert abs(g_mono - g_stereo) < 0.005, \
+        f"مونو {g_mono:.4f} وستيريو {g_stereo:.4f} مش نفس المستوى"
+    assert clip_mono == 0 and clip_stereo == 0
