@@ -241,14 +241,31 @@ def test_se8_source_audio_sync_is_untouched(src, tmp_path, plan):
 
 # ------------------------------------------------- الخطة والحالات الحدّية
 
+@pytest.mark.filterwarnings("ignore")
 def test_se10_the_plan_respects_min_gap_and_max_concurrent():
     """
-    وحدات نقية بلا ffmpeg — الحدود بتنطبّق على **خطة المؤثرات** قبل
-    بناء الرسم، زي `graph.py` بالضبط.
+    **انبنت بالمرحلة ٣** — `autoreel/sfx.py`. الحدود بتنطبّق على
+    **خطة المؤثرات** قبل بناء الرسم، زي `graph.py` بالضبط، فبتنفحص
+    بلا ffmpeg. التغطية التفصيلية بـ`tests/test_sfx_plan.py`.
+
+    هون بنتأكد من التعاقد اللي مرحلة الرسم رح تتّكل عليه: مؤثر واحد
+    لكل نافذة، وفهرس عيّنة صحيح لكل مؤثر، وولا اتنين على إطار واحد.
     """
-    if not hasattr(G, "sfx_plan") and not _sfx_supported():
-        pytest.fail("خطة المؤثرات ما انبنت بعد — الفشل المتوقَّع")
-    raise NotImplementedError
+    from autoreel import sfx as X
+
+    plan = C.frame_plan(SEGS, FPS)
+    cues = X.plan_cues(plan, FPS, zooms=[1.0, 1.1, 1.2, 1.0],
+                       caption_frames=[3, 4, 5, 40, 100, 150, 210])
+    assert cues, "الخطة طلعت فاضية"
+
+    gap = X.seconds_to_frames(X.DEFAULTS["min_gap"], FPS)
+    frames = [c.frame for c in cues]
+    assert all(b - a >= gap for a, b in zip(frames, frames[1:])), \
+        f"مؤثرات أقرب من {gap} إطار: {frames}"
+
+    spf = X.samples_per_frame(FPS)
+    assert all(c.sample == c.frame * spf for c in cues)
+    X.assert_within(cues, sum(plan))
 
 
 def test_se11_a_source_without_audio_disables_effects(src, tmp_path, plan):
