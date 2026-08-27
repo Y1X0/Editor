@@ -18,6 +18,7 @@ S-E1..S-E11 — اختبارات قبول المؤثرات الصوتية.
 import json
 import os
 import subprocess
+from unittest import mock
 
 import pytest
 
@@ -103,8 +104,7 @@ def _render(src, out, events, pcm_audio=False):
                     del cmd[i:i + 2]
             return real_run(cmd, *a2, **k2)
 
-        import unittest.mock as _m
-        with _m.patch.object(R, "run", pcm_run):
+        with mock.patch.object(R, "run", pcm_run):
             R.build_output(src["path"] if isinstance(src, dict) else src,
                            SEGS, [], SCFG, out, work, cues=_cues_for(events))
         return out

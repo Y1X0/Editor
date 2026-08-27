@@ -30,7 +30,7 @@ def _report(total, label):
     return show, done
 
 
-def run(cmd, quiet=True, dry_run=False, total_frames=None, label=""):
+def run(cmd, dry_run=False, total_frames=None, label=""):
     """
     ينفّذ أمر ffmpeg.
 

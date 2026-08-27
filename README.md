@@ -28,7 +28,13 @@ python -m autoreel.cli raw.mp4 --no-cut --no-motion -o reel.mp4
 python -m autoreel.cli raw.mp4 --sizes all -o reel.mp4        # ريلز + مربع + عريض
 python -m autoreel.cli raw.mp4 --sizes all --preview-frames -o reel.mp4
 python -m autoreel.cli raw.mp4 --dry-run -o reel.mp4          # اطبع أوامر ffmpeg بس
+python -m autoreel.cli raw.mp4 --sfx -o reel.mp4              # مع مؤثرات صوتية
 ```
+
+**المؤثرات الصوتية مطفية افتراضيًا** — `--sfx` بتشغّلها. بتضيف أصواتًا
+قصيرة على أحداث الفيديو (قطة، ظهور كابشن، تغيّر زوم، بداية ونهاية)،
+وبتخفض الكلام لـ٠.٧٠ عشان يضل في هامش. خريطة الأحداث بـ`config.json`
+تحت `sfx.events`، والأصول بـ`assets/sfx/`. التفصيل بـ`CLAUDE.md`.
 
 على فيديو جديد شغّل `--preview-frames` أول شي: بيطلّع إطار PNG من كل
 مقاس بلا ترميز، فتشوف نافذة القص قبل ما تصرف دقايق. لو الوجه مقصوص

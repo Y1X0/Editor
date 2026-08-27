@@ -87,7 +87,6 @@ def test_aformat_comes_before_every_delay():
     """
     cues = _cues()
     parts = G.sfx_chain(cues, _inputs(cues))
-    formatted = {p.split("]")[1].split("[")[-1] if False else None for p in parts}
     heads = [p for p in parts if "aformat=" in p]
     assert len(heads) == len({c.asset for c in cues})
     for h in heads:
