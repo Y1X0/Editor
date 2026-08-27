@@ -89,7 +89,7 @@ def _no_probe(monkeypatch):
     `build_base` بتقرا أبعاد المصدر (لازمة لمرساة القصّ بالمسار الواحد).
     الملفات هون وهمية، والأبعاد مش الشي المفحوص — فبنثبّتها.
     """
-    monkeypatch.setattr(R, "probe_size", lambda p: (640, 1138))
+    monkeypatch.setattr(R, "probe_source", lambda p: (640, 1138, True))
 
 
 @pytest.mark.parametrize("key,alt", [("width", 720), ("height", 1280),

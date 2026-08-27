@@ -26,7 +26,7 @@ def workdir(tmp_path, monkeypatch):
     monkeypatch.setattr(C, "probe_duration", lambda _: DUR)
     # نفس السبب: `probe_size` بدها ملف حقيقي، وأبعاد المصدر
     # مدخَل لحساب المرساة مش الشي المفحوص هون.
-    monkeypatch.setattr(R, "probe_size", lambda _: (640, 1138))
+    monkeypatch.setattr(R, "probe_source", lambda _: (640, 1138, True))
     monkeypatch.chdir(tmp_path)
     return tmp_path, str(p)
 
@@ -39,6 +39,23 @@ def run_cli(*args):
 def ffmpeg_cmds(capsys):
     out = capsys.readouterr().out
     return [shlex.split(ln[2:]) for ln in out.splitlines() if ln.startswith("$ ")]
+
+
+def printed(capsys):
+    """
+    `(الأوامر, رسوم_الفلتر)`.
+
+    الهندسة انتقلت من `-vf` لملف الرسم، و`--dry-run` بيطبعه (سطر `#`
+    فيه المسار وبعده الرسم). هيك بيضل الفحص على اللي رح ينفَّذ فعلًا.
+    """
+    lines = capsys.readouterr().out.splitlines()
+    cmds, graphs = [], []
+    for i, ln in enumerate(lines):
+        if ln.startswith("$ "):
+            cmds.append(shlex.split(ln[2:]))
+        elif ln.startswith("# ") and ln.endswith("graph.txt") and i + 1 < len(lines):
+            graphs.append(lines[i + 1])
+    return cmds, graphs
 
 
 def base_args(cfgpath, out="out.mp4"):
@@ -110,10 +127,20 @@ def test_every_size_gets_its_own_encodes(workdir, capsys):
 def test_each_size_uses_its_own_geometry(workdir, capsys):
     tmp, cfgp = workdir
     run_cli(*base_args(cfgp), "--sizes", "all")
-    vfs = [c[c.index("-vf") + 1] for c in ffmpeg_cmds(capsys) if "-vf" in c]
-    assert any("crop=1080:1920:" in v for v in vfs)          # reel
-    assert any("crop=1080:1080:" in v and "*0.3000" in v for v in vfs)   # square
-    assert any("split[bg][fg]" in v for v in vfs)            # wide -> pad
+    _, gs = printed(capsys)
+    assert len(gs) == 3, f"توقّعنا رسمًا لكل مقاس، طلعوا {len(gs)}"
+    import re
+    assert any("crop=1080:1920:" in g for g in gs)          # reel
+    assert any("split[bgg0][fgg0]" in g for g in gs)        # wide -> pad
+
+    # square: `crop_bias=0.30` صار **رقمًا محسوبًا** مش تعبير `*0.3000`
+    # (المرساة انتقلت لبايثون لأن `crop.iw` ما بتتتبّع مقاسًا متغيّرًا).
+    # فبنفحص الأثر: القيمة لازم تطابق ٠.٣٠ وتفترق عن ٠.٥٠.
+    sq = next(g for g in gs if "crop=1080:1080:" in g)
+    y = int(re.search(r"y='(-?\d+)\*between", sq).group(1))
+    ih = round(1138 * (1080 / 640))          # `increase` من مصدر ٦٤٠×١١٣٨
+    assert y == round((ih - 1080) * 0.30)
+    assert y != round((ih - 1080) * 0.50), "الانحياز ما وصل"
 
 
 @needs_raqm

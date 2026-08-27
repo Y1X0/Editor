@@ -321,23 +321,25 @@ def caption_sequence(cap_frames, total_frames):
 # ------------------------------------------------------------ التجميع
 
 def build_graph(cfg, plan, starts, sizes, src_w, src_h,
-                caption_inputs=None, sr=DEFAULT_SR):
+                caption_inputs=None, sr=DEFAULT_SR, with_audio=True):
     """
     الرسم كامل.
 
     `sizes`  = [(اسم, cfg_المقاس)]
     `caption_inputs` = {اسم: فهرس_المدخَل} لتيارات الكابشن، أو None.
+    `with_audio=False` لمصدر بلا تيار صوت — `[0:a]` بتفشّل التشغيلة.
 
-    بيرجّع `(نص_الرسم, [(اسم, تسمية_فيديو, تسمية_صوت)])`.
+    بيرجّع `(نص_الرسم, [(اسم, تسمية_فيديو, تسمية_صوت أو None)])`.
     """
     fps = validate_fps(cfg["output"]["fps"], sr)
     assert_disjoint(starts, plan)
     nseg, nout = len(plan), len(sizes)
 
     zlabels = [f"z{i}" for i in range(nout)]
-    alabels = [f"ao{i}" for i in range(nout)]
+    alabels = [f"ao{i}" for i in range(nout)] if with_audio else [None] * nout
     parts = [video_stem(fps, starts, plan), split_chain("stem", zlabels)]
-    parts += audio_chain(fps, starts, plan, alabels, sr=sr)
+    if with_audio:
+        parts += audio_chain(fps, starts, plan, alabels, sr=sr)
 
     maps = []
     for i, (name, scfg) in enumerate(sizes):
