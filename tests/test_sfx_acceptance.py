@@ -1,14 +1,11 @@
 """
 S-E1..S-E11 — اختبارات قبول المؤثرات الصوتية.
 
-⚠️ **هالفحوص المفروض تفشل هلأ.** المؤثرات ما انبنت بالإنتاج بعد،
-و`graph.sfx_chain` غير موجودة. هاي المرحلة ٢ من `SFX-SPEC.md` §E:
-اكتب الفحص، **شوفه بيفشل**، بعدين نفّذ.
+انكتبت بالمرحلة ٢ **وهي فاشلة عمدًا**، وضلّت حمرا تلات مراحل لحد ما
+انوصل المسار بالمرحلة ٥ — لأن **الاختبار اللي ما شفناه بيفشل مش
+اختبار**. بتنادي `render.build_output` نفسها، مش نسخة منها.
 
     pytest -m "not sfx"      # الطقم بدونهن
-
-القاعدة اللي فرضت هالترتيب: بإعادة التصميم ضلّت E1 وE7 فاشلتين
-عمدًا لمرحلتين، لأن **الاختبار اللي ما شفناه بيفشل مش اختبار**.
 
 ---
 
@@ -56,27 +53,93 @@ def plan():
     return C.frame_plan(SEGS, FPS)
 
 
-def _sfx_supported():
-    return hasattr(G, "sfx_chain")
-
-
 def _require_support():
-    if not _sfx_supported():
-        pytest.fail(
-            "`graph.sfx_chain` مش موجودة — مسار المؤثرات ما انبنى بعد.\n"
-            "هاد **الفشل المتوقَّع** بالمرحلة ٢ من SFX-SPEC.md §E.")
+    if not hasattr(G, "sfx_chain"):
+        pytest.fail("`graph.sfx_chain` مش موجودة — مسار المؤثرات ما انبنى")
+
+
+SCFG = {"output": {"width": OUT_W, "height": OUT_H, "fps": FPS, "crf": 23},
+        "motion": {"enabled": False, "zoom_cycle": [1.0], "pan_px": 0},
+        "geometry": {"fit": "crop", "crop_bias": 0.5},
+        "captions": {"enabled": False, "y_ratio": 0.72, "size": 40},
+        "cuts": {"min_gap": 0.45}}
+
+
+def _cues_for(events):
+    """أحداث الفحص -> `Cue` بواجهة `sfx.py` نفسها، بلا إعادة منطق."""
+    from autoreel import sfx as X
+    return [X.Cue(f, X.frame_to_sample(f, FPS), "caption", a, 0.25)
+            for f, a in events]
 
 
 def _render(src, out, events, pcm_audio=False):
     """
-    تشغيلة كاملة مع/بدون مؤثرات عبر واجهة الإنتاج المتفق عليها.
+    تشغيلة كاملة **عبر `render.build_output`** — المسار الإنتاجي نفسه،
+    مش نسخة منه.
 
-    `pcm_audio=True` بيلغي ترميز AAC — لازم لقياس الوضع بدقة العيّنة،
-    لأن AAC بيضيف ضجيج ±٠.٠٠٣ بيخرّب كشف البداية. تزامن الطرف-لطرف
-    مع AAC محروس أصلًا بـE2.
+    `pcm_audio=True` بيلغي ترميز AAC: قياس الوضع بدقة العيّنة بيتشوّش
+    بضجيج AAC. التزامن الطرف-لطرف مع AAC محروس بـE2.
     """
     _require_support()
-    raise NotImplementedError   # بينكتب بمرحلة التنفيذ
+    import tempfile
+    from autoreel import render as R
+
+    work = tempfile.mkdtemp(prefix="sfxacc_")
+    if pcm_audio:
+        # نفس الرسم ونفس المدخلات — بس PCM بدل AAC عند الترميز.
+        # الحاوية بتضل `.mkv` (mp4 ما بتقبل PCM)، فالمنادي بيمرّر اسمًا
+        # بهالامتداد.
+        real_run = R.run
+
+        def pcm_run(cmd, *a2, **k2):
+            cmd = list(cmd)
+            for enc in ("aac",):
+                if enc in cmd:
+                    i = cmd.index(enc)
+                    cmd[i] = "pcm_s16le"
+            for flag in ("-b:a", "128k"):
+                if flag in cmd:
+                    i = cmd.index(flag)
+                    del cmd[i:i + 2]
+            return real_run(cmd, *a2, **k2)
+
+        import unittest.mock as _m
+        with _m.patch.object(R, "run", pcm_run):
+            R.build_output(src["path"] if isinstance(src, dict) else src,
+                           SEGS, [], SCFG, out, work, cues=_cues_for(events))
+        return out
+    R.build_output(src["path"] if isinstance(src, dict) else src,
+                   SEGS, [], SCFG, out, work, cues=_cues_for(events))
+    return out
+
+
+def _touched(events):
+    out = set()
+    for frame, name in events:
+        start = S.frame_to_sample(frame, FPS)
+        out.update(range(max(0, start - 8),
+                         start + S.wav_info(S.asset(name))[3] + 8))
+    return out
+
+
+def _signal(with_sfx, without, events):
+    """
+    إشارة المؤثرات معزولة — **بعد إلغاء كسب الكلام**.
+
+    الطرح الخام بيخلّي فرق الكلام بالإشارة فالكاشف بيمسك نقرات المصدر
+    كمؤثرات (مقيس: ٢٧ نبضة مقابل ٨ مؤثرات). المنهج المعتمد بالمرحلة ٤.
+    """
+    touched = _touched(events)
+    g = S.estimate_gain(with_sfx, without, touched)
+    return S.difference(with_sfx, without, gain=g), g
+
+
+def _pair(src, tmp_path, events, tag=""):
+    a = str(tmp_path / f"off{tag}.mkv")
+    b = str(tmp_path / f"on{tag}.mkv")
+    _render(src, a, [], pcm_audio=True)
+    _render(src, b, events, pcm_audio=True)
+    return b, a
 
 
 # ------------------------------------------------------ الحارس الأساسي
@@ -89,16 +152,22 @@ def test_se9_the_effects_are_actually_present(src, tmp_path):
     وعدد المؤثرات المكتشفة لازم يساوي عدد الأحداث المطلوبة بالضبط.
     """
     _require_support()
-    with_sfx = str(tmp_path / "with.wav")
-    without = str(tmp_path / "without.wav")
-    _render(src, without, [], pcm_audio=True)
-    _render(src, with_sfx, EVENTS, pcm_audio=True)
-
-    diff = S.difference(with_sfx, without)
+    with_sfx, without = _pair(src, tmp_path, EVENTS)
+    diff, _ = _signal(with_sfx, without, EVENTS)
     assert max(diff) > 0.01, "الفرق صفر — المؤثرات ما نزلت"
-    got = S.hits(diff)
-    assert len(got) == len(EVENTS), \
-        f"المطلوب {len(EVENTS)} مؤثر، لقينا {len(got)}"
+
+    # طاقة بكل نافذة، وولا طاقة برّا النوافذ. العدّ العام ما بيشتغل:
+    # الأصول الصاعدة بتعبر العتبة مرارًا (مقيس ٢١ نبضة لـ٨ مؤثرات).
+    for frame, name in EVENTS:
+        st = S.frame_to_sample(frame, FPS)
+        n = S.wav_info(S.asset(name))[3]
+        assert S.onset_in_window(diff, st, n) is not None, \
+            f"ما في مؤثر عند {name}@{frame}"
+    # النوافذ **مرة وحدة** برّا الحلقة: بناؤها جوّاها بيعيد تركيب
+    # مجموعة ٧٧ ألف عنصر ٣٨٤ ألف مرة، والفحص بيعلّق دقايق.
+    touched = _touched(EVENTS)
+    outside = [diff[i] for i in range(len(diff)) if i not in touched]
+    assert max(outside) < 0.01, f"طاقة برّا النوافذ: {max(outside):.4f}"
 
 
 # ----------------------------------------------------- حفظ الكلام والطول
@@ -110,18 +179,15 @@ def test_se1_speech_is_preserved_sample_for_sample(src, tmp_path):
     الطفرة اللي بتفشّلها: شيل `normalize=0`.
     """
     _require_support()
-    with_sfx, without = str(tmp_path / "w.wav"), str(tmp_path / "o.wav")
-    _render(src, without, [], pcm_audio=True)
-    _render(src, with_sfx, EVENTS, pcm_audio=True)
-
+    with_sfx, without = _pair(src, tmp_path, EVENTS)
     a, b = S.pcm(without), S.pcm(with_sfx)
-    touched = set()
-    for frame, name in EVENTS:
-        start = S.frame_to_sample(frame, FPS)
-        touched.update(range(max(0, start - 4), start + S.wav_info(S.asset(name))[3] + 4))
-    changed = [i for i in range(min(len(a), len(b)))
-               if i not in touched and a[i] != b[i]]
-    assert not changed, f"{len(changed)} عيّنة كلام تغيّرت برّا نوافذ المؤثرات"
+    touched = _touched(EVENTS)
+    clean = [i for i in range(min(len(a), len(b)))
+             if i not in touched and abs(a[i]) > 0.05]
+    assert len(clean) > 50
+    r = [b[i] / a[i] for i in clean]
+    assert max(r) - min(r) < 0.01, "النسبة مش ثابتة — تشويه أو تنفّس أو إزاحة"
+    assert abs(sum(r) / len(r) - G.DEFAULT_SPEECH_GAIN) < 0.01
 
 
 def test_se2_frame_count_is_unchanged(src, tmp_path, plan):
@@ -137,9 +203,7 @@ def test_se3_sample_count_is_unchanged(src, tmp_path):
     بيمدّد المخرَج.
     """
     _require_support()
-    with_sfx, without = str(tmp_path / "w.wav"), str(tmp_path / "o.wav")
-    _render(src, without, [], pcm_audio=True)
-    _render(src, with_sfx, EVENTS, pcm_audio=True)
+    with_sfx, without = _pair(src, tmp_path, EVENTS)
     assert len(S.pcm(with_sfx)) == len(S.pcm(without))
 
 
@@ -153,14 +217,12 @@ def test_se4_every_effect_lands_on_its_planned_frame(src, tmp_path):
     لأن ذروتهن مش عند بدايتهن (`test_sfx_floor.py`).
     """
     _require_support()
-    with_sfx, without = str(tmp_path / "w.wav"), str(tmp_path / "o.wav")
-    _render(src, without, [], pcm_audio=True)
-    _render(src, with_sfx, TRANSIENT_EVENTS, pcm_audio=True)
-
-    got = S.hits(S.difference(with_sfx, without))
-    assert len(got) == len(TRANSIENT_EVENTS)
-    for (frame, name), hit in zip(TRANSIENT_EVENTS, got):
+    with_sfx, without = _pair(src, tmp_path, TRANSIENT_EVENTS, "t")
+    diff, _ = _signal(with_sfx, without, TRANSIENT_EVENTS)
+    for frame, name in TRANSIENT_EVENTS:
         want = S.frame_to_sample(frame, FPS)
+        hit = S.onset_in_window(diff, want, S.wav_info(S.asset(name))[3])
+        assert hit is not None, f"ما في مؤثر عند {name}@{frame}"
         err = hit - S.detector_floor(name) - want
         assert abs(err) <= 2, \
             f"{name}@{frame}: انزياح {err} عيّنة ({err / S.SR * 1000:.3f}ms)"
@@ -172,13 +234,12 @@ def test_se5_placement_error_does_not_accumulate(src, tmp_path):
     آخر مؤثر لازم يكون بنفس دقة أوّلهن.
     """
     _require_support()
-    with_sfx, without = str(tmp_path / "w.wav"), str(tmp_path / "o.wav")
-    _render(src, without, [], pcm_audio=True)
-    _render(src, with_sfx, TRANSIENT_EVENTS, pcm_audio=True)
-
-    got = S.hits(S.difference(with_sfx, without))
-    errs = [h - S.detector_floor(n) - S.frame_to_sample(f, FPS)
-            for (f, n), h in zip(TRANSIENT_EVENTS, got)]
+    with_sfx, without = _pair(src, tmp_path, TRANSIENT_EVENTS, "t")
+    diff, _ = _signal(with_sfx, without, TRANSIENT_EVENTS)
+    errs = [S.onset_in_window(diff, S.frame_to_sample(f, FPS),
+                              S.wav_info(S.asset(n))[3])
+            - S.detector_floor(n) - S.frame_to_sample(f, FPS)
+            for f, n in TRANSIENT_EVENTS]
     assert abs(errs[-1] - errs[0]) <= 1, f"الانزياح بيتراكم: {errs}"
 
 
@@ -192,12 +253,13 @@ def test_se6_a_stereo_asset_lands_correctly(src, tmp_path):
     """
     _require_support()
     assert S.wav_info(S.asset("pop"))[0] == 2, "الأصل مش ستيريو فالفحص فقد معناه"
-    with_sfx, without = str(tmp_path / "w.wav"), str(tmp_path / "o.wav")
-    _render(src, without, [], pcm_audio=True)
-    _render(src, with_sfx, [(60, "pop")], pcm_audio=True)
-    got = S.hits(S.difference(with_sfx, without))
-    assert len(got) == 1
-    err = got[0] - S.detector_floor("pop") - S.frame_to_sample(60, FPS)
+    ev = [(60, "pop")]
+    with_sfx, without = _pair(src, tmp_path, ev, "st")
+    diff, _ = _signal(with_sfx, without, ev)
+    want = S.frame_to_sample(60, FPS)
+    hit = S.onset_in_window(diff, want, S.wav_info(S.asset("pop"))[3])
+    assert hit is not None
+    err = hit - S.detector_floor("pop") - want
     assert abs(err) <= 2, f"انزياح {err} — غالبًا `all=1` ناقصة"
 
 
@@ -210,16 +272,32 @@ def test_se7_a_44100hz_asset_lands_correctly(src, tmp_path):
     ما بيفحص شي.
     """
     _require_support()
-    odd = str(tmp_path / "odd_44100.wav")
+    from autoreel import render as R
+
+    # مجلد أصول بديل فيه `pop` بـ44.1k — بينمرّ على **نفس** مسار
+    # الإنتاج (`render.sfx_asset`)، مش على مسار جانبي.
+    odd_dir = tmp_path / "odd_assets"
+    odd_dir.mkdir()
     subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", S.asset("pop"),
-                    "-ar", "44100", "-c:a", "pcm_s16le", odd], check=True)
-    assert S.wav_info(odd)[2] == 44100
-    with_sfx, without = str(tmp_path / "w.wav"), str(tmp_path / "o.wav")
-    _render(src, without, [], pcm_audio=True)
-    _render(src, with_sfx, [(60, odd)], pcm_audio=True)
-    got = S.hits(S.difference(with_sfx, without))
-    assert len(got) == 1
-    err = got[0] - S.frame_to_sample(60, FPS)
+                    "-ar", "44100", "-c:a", "pcm_s16le",
+                    str(odd_dir / "pop.wav")], check=True, capture_output=True)
+    import wave
+    with wave.open(str(odd_dir / "pop.wav")) as w:
+        assert w.getframerate() == 44100
+
+    ev = [(60, "pop")]
+    old = R.SFX_DIR
+    try:
+        R.SFX_DIR = str(odd_dir)
+        with_sfx, without = _pair(src, tmp_path, ev, "odd")
+    finally:
+        R.SFX_DIR = old
+
+    diff, _ = _signal(with_sfx, without, ev)
+    want = S.frame_to_sample(60, FPS)
+    hit = S.onset_in_window(diff, want, 4080, lead=256)
+    assert hit is not None, "ما نزل المؤثر"
+    err = hit - want
     assert abs(err) <= 60, f"انزياح {err} عيّنة — غالبًا `aformat` ناقصة"
 
 
@@ -232,11 +310,22 @@ def test_se8_source_audio_sync_is_untouched(src, tmp_path, plan):
     الكلام، وهاد بيلغي كل مكسب المرحلة ٦.
     """
     _require_support()
-    from measure.clicks import click_times
-    a, b = str(tmp_path / "a.mp4"), str(tmp_path / "b.mp4")
-    _render(src, a, [])
-    _render(src, b, EVENTS)
-    assert click_times(a) == click_times(b), "تزامن الكلام اتغيّر"
+    # **`click_times` مش أداة تزامن هون.** عتبتها نسبية لقمة الملف،
+    # والمؤثرات بترفع القمة فبتسقّط نقرات مصدر خافتة وبتعدّ مؤثرات
+    # كنقرات (مقيس: ٣ ناقصة و٥ زايدة). قرار مثبَّت بالمرحلة ٤.
+    #
+    # البديل أقوى: شكل موجة الكلام نفسه. برّا نوافذ المؤثرات كل عيّنة
+    # = الأصلية × **نفس** الثابت. إزاحة بعيّنة وحدة بتخرّب المدى
+    # (مقيس ٠.٧٤ مقابل ٠.٠٠٠٦)، و`normalize=1` كمان (٠.٣٣).
+    with_sfx, without = _pair(src, tmp_path, EVENTS, "sync")
+    a, b = S.pcm(without), S.pcm(with_sfx)
+    touched = _touched(EVENTS)
+    clean = [i for i in range(min(len(a), len(b)))
+             if i not in touched and abs(a[i]) > 0.05]
+    assert len(clean) > 50
+    r = [b[i] / a[i] for i in clean]
+    assert max(r) - min(r) < 0.01, \
+        f"شكل الكلام اتغيّر (مدى {max(r) - min(r):.4f}) — إزاحة أو تشويه"
 
 
 # ------------------------------------------------- الخطة والحالات الحدّية

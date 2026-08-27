@@ -47,7 +47,7 @@ def bumped(cfg, path, value):
 
 def test_config_parses_and_has_every_section(raw):
     for section in ("output", "cuts", "motion", "geometry", "captions",
-                    "exports", "whisper_model", "language"):
+                    "sfx", "exports", "whisper_model", "language"):
         assert section in raw, f"قسم ناقص بالconfig: {section}"
 
 
@@ -69,6 +69,7 @@ def test_no_dead_keys_left_behind(raw):
         "captions.enabled", "captions.font", "captions.size",
         "captions.max_words", "captions.color", "captions.highlight",
         "captions.box", "captions.y_ratio",
+        "sfx.enabled", "sfx.min_gap", "sfx.speech_gain",
         "exports",
     }
     actual = set()
@@ -253,3 +254,52 @@ def test_every_export_resolves_and_differs(raw):
         c = X.resolve(raw, name)
         seen.append((c["output"]["width"], c["output"]["height"]))
     assert len(set(seen)) == len(seen), "مقاسان بنفس الأبعاد"
+
+
+# ------------------------------------------------------------------ sfx.*
+
+def _sfx_graph(cfg, plan=(60, 75, 60, 45), fps=30):
+    """
+    نص رسم الفلاتر بمؤثرات — الطريق الأقصر لإثبات إن المفتاح موصول.
+
+    الخطة بتنبنى من نفس المصادر اللي `cli` بتستعملها، فأي مفتاح ما
+    بيغيّر الرسم = مفصول عن الكود.
+    """
+    from autoreel import graph as G, sfx as SFX
+    scfg = cfg.get("sfx") or {}
+    if not scfg.get("enabled", True):
+        return ""
+    cues = SFX.plan_cues(list(plan), fps, zooms=[1.0, 1.1, 1.2, 1.0],
+                         caption_frames=[10, 12, 40, 100, 150, 210], cfg=scfg)
+    if not cues:
+        return ""
+    inputs = {a: i + 1 for i, a in enumerate(sorted({c.asset for c in cues}))}
+    return ";".join(G.sfx_chain(
+        cues, inputs,
+        speech_gain=float(scfg.get("speech_gain", G.DEFAULT_SPEECH_GAIN))))
+
+
+def test_sfx_enabled_is_wired(cfg):
+    """
+    **الافتراضي `false`.** ميزة جديدة ما بتغيّر صوت كل ريل بلا طلب —
+    وتشغيلها افتراضيًا كسر E2 فعلًا (٩ نقرات بدل ٨، مؤثر انعدّ كنقرة).
+    """
+    assert cfg["sfx"]["enabled"] is False, "المؤثرات مشغّلة افتراضيًا"
+    assert _sfx_graph(bumped(cfg, ["sfx", "enabled"], True)), "التشغيل ما بيبني شي"
+    assert _sfx_graph(cfg) == ""
+
+
+def test_sfx_min_gap_is_wired(cfg):
+    """كابشنان متلاصقان (١٠ و١٢): فجوة أكبر بتبلع التاني."""
+    on = bumped(cfg, ["sfx", "enabled"], True)
+    tight = _sfx_graph(bumped(on, ["sfx", "min_gap"], 0.01))
+    wide = _sfx_graph(bumped(on, ["sfx", "min_gap"], 1.0))
+    assert tight.count("adelay=") > wide.count("adelay="), \
+        "min_gap ما غيّرت عدد المؤثرات"
+
+
+def test_sfx_speech_gain_is_wired(cfg):
+    on = bumped(cfg, ["sfx", "enabled"], True)
+    assert "volume=0.7000[spk]" in _sfx_graph(on)
+    assert "volume=0.5000[spk]" in _sfx_graph(
+        bumped(on, ["sfx", "speech_gain"], 0.5))

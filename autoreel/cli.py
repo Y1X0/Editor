@@ -1,10 +1,11 @@
 """نقطة التشغيل: python -m autoreel.cli input.mp4 -o out.mp4"""
 import argparse, json, os, tempfile, shutil, sys
 from . import (transcribe as T, cuts as C, captions as CAP, render as R,
-               exports as X)
+               exports as X, graph as G, sfx as SFX)
 
 
-def _one_export(name, cfg, src, segs, w2, out_path, work, a, src_info=None):
+def _one_export(name, cfg, src, segs, w2, out_path, work, a, src_info=None,
+                cues=None, speech_gain=G.DEFAULT_SPEECH_GAIN):
     """
     تصدير مقاس واحد. بيرجّع سطر ملخّص.
 
@@ -44,7 +45,8 @@ def _one_export(name, cfg, src, segs, w2, out_path, work, a, src_info=None):
                 f"crop_bias={cfg.get('geometry', {}).get('crop_bias', 0.5)}  {out_path}")
 
     R.build_output(src, segs, caps, cfg, out_path, os.path.join(work, name),
-                   dry_run=a.dry_run, src_info=src_info)
+                   dry_run=a.dry_run, src_info=src_info, cues=cues,
+                   speech_gain=speech_gain)
 
     mb = "" if a.dry_run else f" · {os.path.getsize(out_path)/1e6:.1f}MB"
     return f"  {name:<8} {W}×{H}  fit={fit:<5} خط={size}{mb}  {out_path}"
@@ -60,6 +62,8 @@ def main():
     ap.add_argument("--no-captions", action="store_true")
     ap.add_argument("--no-cut", action="store_true", help="لا تشيل الصمت")
     ap.add_argument("--no-motion", action="store_true")
+    ap.add_argument("--sfx", action="store_true", help="شغّل المؤثرات الصوتية")
+    ap.add_argument("--no-sfx", action="store_true", help="بلا مؤثرات صوتية")
     ap.add_argument("--keep", action="store_true", help="خلّي الملفات المؤقتة")
     ap.add_argument("--dry-run", action="store_true",
                     help="اطبع أوامر ffmpeg بدون ما تشغّلها")
@@ -132,6 +136,36 @@ def main():
         w2 = C.remap_words(words, segs, durations=durations) if words else []
         new_dur = sum(durations)
 
+        # ---- خطة المؤثرات: محسوبة **مرة وحدة**، مستقلة عن المقاس ----
+        #
+        # المؤثرات صوت، والصوت واحد لكل الريل. وحسابها من `root` مش من
+        # cfg المقاس مقصود: `exports` بتدهس `output` و`captions.size`
+        # و`geometry` وبس — **ولا مقاس بيدهس `motion` ولا
+        # `captions.max_words`**، وهدول الاتنين اللي بتعتمد عليهن
+        # الأحداث. فالخطة واحدة بالتعريف، مش بالصدفة.
+        # **مطفية افتراضيًا.** ميزة جديدة ما بتغيّر صوت كل ريل موجود
+        # بلا ما حدا يطلب: تشغيلها بيضرب الكلام بـ٠.٧٠ وبيضيف مؤثرات،
+        # وهاد قرار صوتي مش تفصيلًا. `--sfx` بتشغّلها.
+        scfg = root.get("sfx") or {}
+        want_sfx = (a.sfx or scfg.get("enabled", False)) and not a.no_sfx
+        cues = []
+        if want_sfx and words:
+            plan = C.frame_plan(segs, fps)
+            groups = CAP.group_words(w2, root["captions"]["max_words"]) if w2 else []
+            # `enabled` بتنحسم **هون** وبتنمرّر محسومة. بدونها `--sfx`
+            # بتشغّل الفرع بس `plan_cues` بترجّع فاضي لأنها بتقرا
+            # `enabled: false` من نفس الconfig — والتشغيلة بتنجح بلا
+            # ولا مؤثر. صار معنا، وما انكشف إلا بقياس المخرَج.
+            cues = SFX.plan_cues(
+                plan, fps,
+                zooms=G.zoom_values(root, len(plan)),
+                caption_frames=[round(g["start"] * fps) for g in groups],
+                cfg={**scfg, "enabled": True})
+            SFX.assert_within(cues, sum(plan))
+            if cues:
+                print(f"[4/4] {len(cues)} مؤثر صوتي")
+        speech_gain = float(scfg.get("speech_gain", G.DEFAULT_SPEECH_GAIN))
+
         # ---- لكل مقاس: كابشن جديد + ترميز ----
         what = "معاينة" if a.preview_frames else "تصدير"
         print(f"[4/4] {what} {len(picked)} مقاس: {', '.join(picked)}")
@@ -146,7 +180,8 @@ def main():
             try:
                 rows.append(_one_export(name, cfg, a.input, segs, w2,
                                         out_path, work, a,
-                                        src_info=src_info))
+                                        src_info=src_info, cues=cues,
+                                        speech_gain=speech_gain))
             except Exception as e:
                 # فشل مقاس ما بيوقف الباقي — بس كود الخروج بيصير ≠ ٠.
                 failed.append(name)

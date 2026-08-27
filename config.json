@@ -50,17 +50,38 @@
     ],
     "y_ratio": 0.72
   },
+  "sfx": {
+    "enabled": false,
+    "min_gap": 0.12,
+    "speech_gain": 0.7
+  },
   "exports": {
     "reel": {},
     "square": {
-      "output": { "width": 1080, "height": 1080 },
-      "captions": { "size": 44, "y_ratio": 0.80 },
-      "geometry": { "crop_bias": 0.30 }
+      "output": {
+        "width": 1080,
+        "height": 1080
+      },
+      "captions": {
+        "size": 44,
+        "y_ratio": 0.8
+      },
+      "geometry": {
+        "crop_bias": 0.3
+      }
     },
     "wide": {
-      "output": { "width": 1920, "height": 1080 },
-      "captions": { "size": 44, "y_ratio": 0.82 },
-      "geometry": { "fit": "pad" }
+      "output": {
+        "width": 1920,
+        "height": 1080
+      },
+      "captions": {
+        "size": 44,
+        "y_ratio": 0.82
+      },
+      "geometry": {
+        "fit": "pad"
+      }
     }
   }
 }
