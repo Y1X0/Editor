@@ -122,7 +122,90 @@ def split_chain(src_label, labels):
             + "".join(f"[{x}]" for x in labels))
 
 
-def audio_chain(fps, starts, plan, out_labels, sr=DEFAULT_SR):
+DEFAULT_SPEECH_GAIN = 0.70
+
+
+def sfx_chain(cues, inputs, in_label="acat", out_label="amixed",
+              speech_gain=DEFAULT_SPEECH_GAIN, sr=DEFAULT_SR):
+    """
+    مزج المؤثرات على الصوت المقصوص. **دالة نقية — نص داخل، نص برّا.**
+
+    `cues`   = `[autoreel.sfx.Cue]` — **المصدر الوحيد للتخطيط.** هالوحدة
+               ما بتختار أحداثًا ولا بتصفّي؛ كل هاد بـ`sfx.py`.
+    `inputs` = `{اسم الأصل: فهرس مدخَل ffmpeg}`.
+
+    الشكل، وكل جزء فيه مقيس (`SFX-SPEC.md` §A.3/§A.4):
+
+        [k:a] aformat=sample_rates=SR:channel_layouts=stereo   ← مرة لكل أصل
+              [, asplit=n]                                     ← إعادة استعمال
+        [x]   volume=<كسب الحدث>, adelay=<فهرس العيّنة>S:all=1  ← لكل مؤثر
+        [acat]volume=<كسب الكلام>
+        [spk][s0][s1]… amix=inputs=N+1:duration=first:normalize=0
+
+    **الترتيب مش تجميليًا:**
+
+    * `aformat` **قبل** `adelay` — `adelay=NS` بتعدّ عيّنات بمعدّل
+      **المدخَل**. أصل 44.1k بلاها بيقع بعد ٥٢٢٤٥ عيّنة بدل ٤٨٠٠٠،
+      يعني **+٨٨ms**، بلا أي تحذير من ffmpeg.
+    * `all=1` إلزامية — بدونها `adelay` بتأخّر **القناة الأولى بس**
+      والتانية بتضل مكانها، فالمؤثر بيقع عند العيّنة **٠** (خطأ
+      −٤٨٠٠٠). صامتة كمان.
+    * `normalize=0` إلزامية — الافتراضية بتقسّم كل مدخل على عددهن،
+      فالكلام بيخفت لـ٠.١١× عند ٢٠ مؤثرًا **وبيتنفّس** مع انتهاء كل
+      مؤثر. معها: ٠ عيّنة كلام متغيّرة.
+    * `adelay` **مطلقة لكل مؤثر** — مش سلسلة تأخيرات متتابعة. فالخطأ
+      ما بيتراكم بالبناء: آخر مؤثر بنفس دقة أوّلهن.
+
+    **كسب الكلام ٠.٧٠ ثابت مش مقيسًا.** المصدر ≤١.٠ بالتعريف، فالضرب
+    بـ٠.٧٠ بيضمن ذروة ≤٠.٧٠ بلا أي تمريرة تحليل. مع أعلى ذروة أصل
+    (٠.٩٠) وكسب ٠.٢٥: ٠.٧٠ + ٠.٩٠×٠.٢٥ = **٠.٩٢٥ < ١.٠** — الهامش
+    مضمون بالحساب مش بالحظ.
+
+    ولا `alimiter`: مقيس إنه بيأخّر التيار **٢٣٩ عيّنة (٤.٩٨ms)**،
+    فبيرجّع E2 من ١.٩٨ms لـ~٥ms.
+    """
+    if not cues:
+        raise ValueError("ولا مؤثر — الاستدعاء نفسه غلط، شوف `audio_chain`")
+    missing = sorted({c.asset for c in cues} - set(inputs))
+    if missing:
+        raise ValueError(f"أصول بلا مدخَل: {missing}")
+
+    order = []
+    for c in cues:
+        if c.asset not in order:
+            order.append(c.asset)
+
+    parts, branches = [], {}
+    for ai, asset in enumerate(order):
+        n = sum(1 for c in cues if c.asset == asset)
+        labels = [f"x{ai}_{j}" for j in range(n)]
+        head = (f"[{inputs[asset]}:a]"
+                f"aformat=sample_rates={sr}:channel_layouts=stereo")
+        # `asplit=1` صالحة بس بلا معنى — الأصل المستعمل مرة وحدة ما بينقسم.
+        if n == 1:
+            parts.append(f"{head}[{labels[0]}]")
+        else:
+            parts.append(f"{head},asplit={n}" + "".join(f"[{x}]" for x in labels))
+        branches[asset] = list(labels)
+
+    tags = []
+    for i, c in enumerate(cues):
+        src = branches[c.asset].pop(0)
+        tag = f"s{i}"
+        parts.append(f"[{src}]volume={c.gain:.4f},"
+                     f"adelay={c.sample}S:all=1[{tag}]")
+        tags.append(tag)
+
+    parts.append(f"[{in_label}]volume={speech_gain:.4f}[spk]")
+    parts.append("[spk]" + "".join(f"[{t}]" for t in tags)
+                 + f"amix=inputs={len(tags) + 1}:duration=first:normalize=0"
+                   f"[{out_label}]")
+    return parts
+
+
+def audio_chain(fps, starts, plan, out_labels, sr=DEFAULT_SR,
+                cues=None, sfx_inputs=None,
+                speech_gain=DEFAULT_SPEECH_GAIN):
     """
     `atrim` على حدود الإطارات، ثم `concat`، ثم نسخة لكل مخرَج.
 
@@ -157,11 +240,24 @@ def audio_chain(fps, starts, plan, out_labels, sr=DEFAULT_SR):
                      f"asetpts=PTS-STARTPTS[a{i}]")
     parts.append("".join(f"[a{i}]" for i in range(k))
                  + f"concat=n={k}:v=0:a=1[acat]")
+
+    # المؤثرات بتنمزج **بعد `concat` وقبل التوزيع**: أحداثها معرَّفة
+    # على التوقيت النهائي (بعد القص)، وهي مستقلة عن المقاس تمامًا زي
+    # الصوت — فبناؤها لكل مخرَج شغل مكرَّر بلا فايدة.
+    #
+    # وبلا مؤثرات **ما بينضاف ولا فلتر**: المسار بيضل حرفيًا زي ما كان،
+    # فالمخرَج بلا SFX متطابق بايت-ببايت مع ما قبل هالمرحلة.
+    tail = "acat"
+    if cues:
+        parts += sfx_chain(cues, sfx_inputs or {}, in_label="acat",
+                           out_label="amixed", speech_gain=speech_gain, sr=sr)
+        tail = "amixed"
+
     # قيد حقيقي: كل تسمية مخرَج بالفلتر بتنربط **مرة وحدة**.
     if len(out_labels) == 1:
-        parts.append(f"[acat]anull[{out_labels[0]}]")
+        parts.append(f"[{tail}]anull[{out_labels[0]}]")
     else:
-        parts.append(f"[acat]asplit={len(out_labels)}"
+        parts.append(f"[{tail}]asplit={len(out_labels)}"
                      + "".join(f"[{x}]" for x in out_labels))
     return parts
 
@@ -321,13 +417,17 @@ def caption_sequence(cap_frames, total_frames):
 # ------------------------------------------------------------ التجميع
 
 def build_graph(cfg, plan, starts, sizes, src_w, src_h,
-                caption_inputs=None, sr=DEFAULT_SR, with_audio=True):
+                caption_inputs=None, sr=DEFAULT_SR, with_audio=True,
+                cues=None, sfx_inputs=None,
+                speech_gain=DEFAULT_SPEECH_GAIN):
     """
     الرسم كامل.
 
     `sizes`  = [(اسم, cfg_المقاس)]
     `caption_inputs` = {اسم: فهرس_المدخَل} لتيارات الكابشن، أو None.
     `with_audio=False` لمصدر بلا تيار صوت — `[0:a]` بتفشّل التشغيلة.
+    `cues` = `[sfx.Cue]` من `autoreel.sfx`، و`sfx_inputs` = {أصل: فهرس}.
+    بلا صوت ما في مؤثرات: ما في `[acat]` نمزج عليها أصلًا.
 
     بيرجّع `(نص_الرسم, [(اسم, تسمية_فيديو, تسمية_صوت أو None)])`.
     """
@@ -339,7 +439,9 @@ def build_graph(cfg, plan, starts, sizes, src_w, src_h,
     alabels = [f"ao{i}" for i in range(nout)] if with_audio else [None] * nout
     parts = [video_stem(fps, starts, plan), split_chain("stem", zlabels)]
     if with_audio:
-        parts += audio_chain(fps, starts, plan, alabels, sr=sr)
+        parts += audio_chain(fps, starts, plan, alabels, sr=sr,
+                             cues=cues, sfx_inputs=sfx_inputs,
+                             speech_gain=speech_gain)
 
     maps = []
     for i, (name, scfg) in enumerate(sizes):

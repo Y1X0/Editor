@@ -49,11 +49,40 @@ def wav_info(path):
         return w.getnchannels(), w.getsampwidth() * 8, w.getframerate(), w.getnframes()
 
 
-def difference(with_sfx, without_sfx, sr=SR):
-    """إشارة المؤثرات لحالها = |مع − بدون|، عيّنة بعيّنة."""
+def estimate_gain(with_sfx, without_sfx, touched=(), sr=SR, floor=0.05):
+    """
+    كسب الكلام الفعلي بالمخرَج، مقيسًا من المخرَج نفسه.
+
+    **ليش بينقاس مش بينفترض:** الرسم بيطلب `volume=0.70`، بس الواصل
+    فعليًا `0.4950 = 0.70 × 1/√2` لمصدر **مونو** — تحويل مونو->ستيريو
+    جوّا الرسم بيضيف ١/√٢ (حفظ طاقة). لمصدر ستيريو ما في تحويل
+    فالكسب ٠.٧٠. يعني الرقم بيعتمد على شكل المصدر، فافتراضه غلط.
+
+    الوسيط على السعات الكبيرة: تكميم ١٦ بت بيخرّب النسب الصغيرة
+    (مقيس: مدى ١.٦e−٢ عند |x|>٠.٠٠١ مقابل ٢e−٤ عند |x|>٠.٠٥).
+    """
+    a, b = pcm(without_sfx, sr), pcm(with_sfx, sr)
+    skip = set(touched)
+    r = sorted(b[i] / a[i] for i in range(min(len(a), len(b)))
+               if i not in skip and abs(a[i]) > floor)
+    if not r:
+        return 1.0
+    return r[len(r) // 2]
+
+
+def difference(with_sfx, without_sfx, sr=SR, gain=1.0):
+    """
+    إشارة المؤثرات لحالها = |مع − كسب×بدون|.
+
+    **`gain` مش زينة.** الكلام بينضرب بثابت لما تنمزج المؤثرات
+    (§الهامش)، فطرح خام بيخلّي فرق الكلام بالإشارة — والكاشف بيمسك
+    نقرات المصدر كأنها مؤثرات. صار معنا: ٢٧ نبضة مكتشفة مقابل ٨
+    مؤثرات، والزيادة كلها عند مضاعفات ٢٤٠٠٠ عيّنة = نقرات المصدر
+    كل نص ثانية.
+    """
     a, b = pcm(without_sfx, sr), pcm(with_sfx, sr)
     n = min(len(a), len(b))
-    return [abs(b[i] - a[i]) for i in range(n)]
+    return [abs(b[i] - gain * a[i]) for i in range(n)]
 
 
 def hits(diff, ratio=0.35, refractory=2400):
@@ -73,6 +102,33 @@ def hits(diff, ratio=0.35, refractory=2400):
             out.append(i)
             last = i
     return out
+
+
+def onset_in_window(diff, start, length, ratio=0.35, lead=64):
+    """
+    بداية المؤثر **داخل نافذته** — مش من قائمة نبضات عامة.
+
+    ليش النافذة: العدّ العام بينكسر مرّتين. الأصول الصاعدة
+    (`whoosh`/`riser`) بتعبر العتبة مرارًا لأن غلافها بيصعد وينزل،
+    و`impact` منخفض التردد (٨١Hz) فدوراته بتتباعد أكتر من فترة
+    الكبت (٢٤٠٠ عيّنة) وبيتعدّ ٣ مرات. مقيس: ٧ نبضات لـ٥ مؤثرات.
+
+    بالنافذة السؤال بيصير محدَّدًا: **وين بلّش هالمؤثر بالذات؟**
+    بترجّع فهرس أول عيّنة توصل `ratio` من قمة النافذة، أو `None`.
+    """
+    lo = max(0, start - lead)
+    hi = min(len(diff), start + length)
+    win = diff[lo:hi]
+    if not win:
+        return None
+    peak = max(win)
+    if peak <= 0:
+        return None
+    t = peak * ratio
+    for i, v in enumerate(win):
+        if v >= t:
+            return lo + i
+    return None
 
 
 def frame_to_sample(frame, fps, sr=SR):
