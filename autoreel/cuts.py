@@ -1,12 +1,59 @@
 """بناء خطة القص من توقيتات الكلمات (أدق من silencedetect لفيديو الكلام)."""
-import subprocess, json
+import subprocess, re
+
+
+def probe(path):
+    """
+    `(عرض, ارتفاع, فيه_صوت, مدة)` بنداء `ffmpeg -i` **واحد**.
+
+    **ولا اعتماد على `ffprobe`.** كان `probe_duration` بتناديه بينما
+    `probe_source` بتتجنّبه صراحة — فالتجنّب كان نصّ تجنّب، وأول سطر
+    بالمسار كان بينهار على أي تثبيت static (وهاد شكل التثبيت الشائع
+    على Termux، وهو حال بيئة التطوير عنا):
+
+        FileNotFoundError: [Errno 2] No such file or directory: 'ffprobe'
+
+    ولا فحص مسكها لأن كل فحص بيمرق على المسار كان بيبدّل
+    `probe_duration` — الفحص اللي بيبدّل الجزء المكسور ما بيشوف الكسر.
+    الحارس هلأ `tests/test_probe.py` وبينادي المسار **بلا تبديل**.
+
+    ⚠️ **المدة مقرَّبة لجزء المئة من الثانية، وهاد حدّ من ffmpeg مش
+    اختيارًا منّا.** سطر `Duration: HH:MM:SS.ss` هو أدقّ شي بيطلّعه
+    `ffmpeg -i` بأي `-loglevel` (فحصناهن كلهن)، بينما `ffprobe` كان
+    بيعطي ميكروثانية. الفرق ≤ ٥ms. البدائل انقاست وانرفضت:
+
+    | البديل | الفرق عن `ffprobe` |
+    |---|---|
+    | `Duration:` من stderr | **≤ ٥ms** ← المختار |
+    | `-progress` + `out_time_us` | لحد ١٨٦ms — بيقيس نهاية أطول تيار مش مدة الحاوية |
+    | `-map 0 -c copy` + `-progress` | نفسها، ١٨٦ms |
+
+    **وين بتوصل هالـ٥ms:** `duration` بتدخل بتلات أماكن بس — `--no-cut`
+    (الفيديو كله مقطع واحد)، ولا كلمات أصلًا، وحدّ `min(duration,
+    prev_end + pad)` اللي بيشتغل بس لما آخر كلمة تخلص على بعد أقل من
+    `pad` من نهاية الملف. بالمسار المعتاد (قص شغّال وفيه كلمات) ما إلها
+    أثر. بالحالات التلاتة بتغيّر `frame_plan` **بإطار واحد** لـ٨.٢٥٪ من
+    المدد عند ٣٠fps (مسح ٢٠٠ ألف مدة). مش خطأ بأي اتجاه — الاتنين قراءة
+    صحيحة لمدة الحاوية، وE1 (المخرَج = الخطة) بيضل صحيحًا بالحالتين.
+    """
+    r = subprocess.run(["ffmpeg", "-i", str(path)], capture_output=True, text=True)
+    m = re.search(r"Stream #\d+:\d+.*?: Video:.*?, (\d+)x(\d+)", r.stderr)
+    if not m:
+        raise RuntimeError(f"ما قدرت أقرا أبعاد الفيديو من {path}")
+    has_audio = re.search(r"Stream #\d+:\d+.*?: Audio:", r.stderr) is not None
+
+    d = re.search(r"Duration: (\d+):(\d\d):(\d\d(?:\.\d+)?)", r.stderr)
+    if not d:
+        # `Duration: N/A` بتطلع لتيار حي أو ملف مقصوص — وأي رقم
+        # منخترعه هون بينتشر لخطة القص كلها. الفشل أوضح.
+        raise RuntimeError(f"ما قدرت أقرا مدة {path} — `ffmpeg -i` ما أعطى مدة")
+    dur = int(d.group(1)) * 3600 + int(d.group(2)) * 60 + float(d.group(3))
+    return int(m.group(1)), int(m.group(2)), has_audio, dur
 
 
 def probe_duration(path):
-    r = subprocess.run(
-        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-         "-of", "json", path], capture_output=True, text=True, check=True)
-    return float(json.loads(r.stdout)["format"]["duration"])
+    """مدة المصدر بالثواني. شوف `probe` — التقريب لجزء المئة موثّق هناك."""
+    return probe(path)[3]
 
 
 def segments_from_words(words, duration, min_gap=0.45, pad=0.10, min_seg=0.35):

@@ -1,7 +1,8 @@
 """تجميع الفيديو النهائي: قص + زوم لكل مقطع + حرق الكابشن."""
-import re, shutil, subprocess, sys, tempfile, os, shlex
+import shutil, subprocess, sys, tempfile, os, shlex
 
 from . import captions as CAP
+from . import cuts as C
 from . import graph as G
 from .cuts import frame_plan
 
@@ -177,19 +178,22 @@ def preview_frame(src, at, cfg, out_path, caption_png=None, dry_run=False):
 
 def probe_source(path):
     """
-    `(عرض, ارتفاع, فيه_صوت)` بنداء `ffmpeg -i` واحد.
+    `(عرض, ارتفاع, فيه_صوت)` — واجهة رفيعة فوق `cuts.probe`.
 
-    ليش مش `ffprobe`: `graph.size_chain` بتحسب مرساة القصّ من أبعاد
-    المصدر (لأن `crop.iw` ما بتتتبّع مقاسًا متغيّرًا)، ومسار الصوت لازم
-    يعرف إذا في تيار صوت أصلًا. و`ffmpeg` موجود بالتعريف بينما `ffprobe`
-    ممكن يكون ناقصًا بتثبيتات ثابتة.
+    `graph.size_chain` بتحسب مرساة القصّ من أبعاد المصدر (لأن `crop.iw`
+    ما بتتتبّع مقاسًا متغيّرًا)، ومسار الصوت لازم يعرف إذا في تيار صوت
+    أصلًا.
+
+    القراءة نفسها بـ`cuts.probe` مش هون: نسختان من تحليل مخرَج
+    `ffmpeg -i` بتنفرقا. وهناك مش هون لأن `render` بتستورد `cuts`،
+    فالعكس بيعمل دورة استيراد.
     """
-    r = subprocess.run(["ffmpeg", "-i", str(path)], capture_output=True, text=True)
-    m = re.search(r"Stream #\d+:\d+.*?: Video:.*?, (\d+)x(\d+)", r.stderr)
-    if not m:
-        raise RuntimeError(f"ما قدرت أقرا أبعاد الفيديو من {path}")
-    has_audio = re.search(r"Stream #\d+:\d+.*?: Audio:", r.stderr) is not None
-    return int(m.group(1)), int(m.group(2)), has_audio
+    return probe_source_full(path)[:3]
+
+
+def probe_source_full(path):
+    """`(عرض, ارتفاع, فيه_صوت, مدة)` — النداء الواحد كامل."""
+    return C.probe(path)
 
 
 def materialise_captions(cap_frames, total_frames, outdir):
