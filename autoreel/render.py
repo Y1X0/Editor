@@ -1,5 +1,5 @@
 """تجميع الفيديو النهائي: قص + زوم لكل مقطع + حرق الكابشن."""
-import re, shutil, subprocess, os, shlex
+import re, shutil, subprocess, sys, tempfile, os, shlex
 
 from . import captions as CAP
 from . import graph as G
@@ -11,7 +11,25 @@ def preview(cmd):
     return " ".join(shlex.quote(c) for c in cmd)
 
 
-def run(cmd, quiet=True, dry_run=False):
+def _report(total, label):
+    """طابع تقدّم بيكتب على stderr وبيتحدّث عند تغيّر النسبة بس."""
+    state = {"pct": -1}
+
+    def show(done):
+        pct = min(100, int(done * 100 / total)) if total else 0
+        if pct != state["pct"]:
+            state["pct"] = pct
+            print(f"\r  {label} {pct:3d}%  ({done}/{total} إطار)",
+                  end="", file=sys.stderr, flush=True)
+
+    def done():
+        if state["pct"] >= 0:
+            print("", file=sys.stderr, flush=True)
+
+    return show, done
+
+
+def run(cmd, quiet=True, dry_run=False, total_frames=None, label=""):
     """
     ينفّذ أمر ffmpeg.
 
@@ -19,14 +37,52 @@ def run(cmd, quiet=True, dry_run=False):
     خطة القص، الهندسة، رسم الكابشن، أسماء الملفات — بيشتغل عادي،
     فالمطبوع هو الأمر الحقيقي مش تقريب إله. هيك بتنفحص طبقة الفيديو
     من طرف لطرف بلا ffmpeg.
+
+    `total_frames` بيشغّل `-progress pipe:1`: ffmpeg بيكتب `frame=N`
+    لstdout مع كل تقدّم، وبما إن **العدد النهائي معروف مسبقًا** من خطة
+    الإطارات، بتطلع نسبة حقيقية مش تخمين. هاد ممكن هلأ بس لأن المخرَج
+    صار تشغيلة وحدة؛ قبلها كان الشغل مقسومًا على عشرات العمليات.
+
+    stderr بينكتب لملف مؤقت مش لأنبوب: القراءة من stdout وstderr سوا
+    بلا خيوط بتتعلّق لو امتلأ أحدهما، وffmpeg بيكتب stderr غزير عند
+    الفشل.
     """
     if dry_run:
         print("$ " + preview(cmd))
         return None
-    r = subprocess.run(cmd, capture_output=True, text=True)
-    if r.returncode != 0:
-        raise RuntimeError(f"ffmpeg فشل:\n{preview(cmd[:12])}...\n{r.stderr[-1800:]}")
-    return r
+    if total_frames:
+        cmd = cmd[:1] + ["-progress", "pipe:1", "-nostats"] + cmd[1:]
+
+    show, finish = _report(total_frames, label) if total_frames else (None, None)
+    with tempfile.TemporaryFile("w+", encoding="utf-8", errors="replace") as err:
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE if total_frames else None,
+                             stderr=err, text=True)
+        try:
+            if total_frames:
+                for line in p.stdout:
+                    if line.startswith("frame="):
+                        try:
+                            show(int(line.split("=", 1)[1]))
+                        except ValueError:
+                            pass
+            code = p.wait()
+        except BaseException:
+            # مقاطعة (Ctrl-C) أو أي خطأ: لا تخلّي ffmpeg شغّالًا ورا ظهرك
+            p.kill()
+            p.wait()
+            if finish:
+                finish()
+            raise
+        finally:
+            if p.stdout:
+                p.stdout.close()
+        if finish:
+            finish()
+        if code != 0:
+            err.seek(0)
+            tail = "\n".join(err.read().splitlines()[-20:])
+            raise RuntimeError(f"ffmpeg فشل ({code}):\n{preview(cmd[:12])}...\n{tail}")
+    return code
 
 
 DEFAULT_GEOMETRY = {"fit": "crop", "crop_bias": 0.5, "pad_blur": 24}
@@ -246,6 +302,27 @@ def build_output(src, segs, caps, cfg, out_path, workdir,
             "-preset", "veryfast", "-pix_fmt", "yuv420p"]
     if alabel:
         cmd += ["-c:a", "aac", "-b:a", "128k", "-ar", str(G.DEFAULT_SR), "-ac", "2"]
-    cmd += ["-movflags", "+faststart", str(out_path)]
-    run(cmd, dry_run=dry_run)
+    # كتابة ذرّية: ffmpeg بيكتب لملف `.part`، وما بينتقل للاسم النهائي
+    # إلا بعد كود خروج صفر. قِسنا إن قتل ffmpeg بنص التشغيل بيخلّي
+    # mp4 **بلا moov** — ملف بشكل مخرَج وهو تالف، وهاد أخطر من الفشل
+    # نفسه لأنه بينكتشف بعد الرفع.
+    #
+    # الامتداد بيضل `.mp4`: ffmpeg بيختار المُغلِّف من الامتداد، و
+    # `out.mp4.part` بترمي خطأ "مغلِّف مجهول".
+    root, ext = os.path.splitext(str(out_path))
+    part = f"{root}.part{ext}"
+    cmd += ["-movflags", "+faststart", part]
+    try:
+        run(cmd, dry_run=dry_run, total_frames=None if dry_run else total,
+            label=name)
+    except BaseException:
+        # الفشل والمقاطعة سوا: ولا ملف بيضل بشكل مخرَج.
+        if os.path.exists(part):
+            try:
+                os.remove(part)
+            except OSError:
+                pass
+        raise
+    if not dry_run:
+        os.replace(part, str(out_path))
     return out_path

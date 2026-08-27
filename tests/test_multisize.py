@@ -5,6 +5,7 @@
 بده ملف فيديو. كل الباقي حقيقي: القص، الكابشن، سلسلة الفلاتر، الأسماء.
 """
 import json
+import os
 import shlex
 import sys
 
@@ -58,6 +59,21 @@ def printed(capsys):
     return cmds, graphs
 
 
+def targets(capsys_cmds):
+    """
+    مسار المخرَج النهائي لكل أمر.
+
+    ffmpeg بيكتب لـ`x.part.mp4` والاسم النهائي بيجي بـ`os.replace` بعد
+    نجاحه (كتابة ذرّية)، فالاختبار بيشيل `.part` ليقارن الاسم المقصود.
+    """
+    out = []
+    for c in capsys_cmds:
+        t = c[-1]
+        root, ext = os.path.splitext(t)
+        out.append(root[:-5] + ext if root.endswith(".part") else t)
+    return out
+
+
 def base_args(cfgpath, out="out.mp4"):
     return ["raw.mp4", "--srt", str(ROOT / "test.srt"), "-c", cfgpath,
             "-o", out, "--dry-run"]
@@ -69,18 +85,18 @@ def base_args(cfgpath, out="out.mp4"):
 def test_default_run_keeps_the_plain_name(workdir, capsys):
     tmp, cfgp = workdir
     assert run_cli(*base_args(cfgp)) == 0
-    targets = [c[-1] for c in ffmpeg_cmds(capsys)]
-    assert any(t.endswith("/out.mp4") or t == "out.mp4" for t in targets)
-    assert not any(".reel.mp4" in t for t in targets)
+    t = targets(ffmpeg_cmds(capsys))
+    assert any(x.endswith("/out.mp4") or x == "out.mp4" for x in t), t
+    assert not any(".reel.mp4" in x for x in t)
 
 
 @needs_raqm
 def test_multi_size_suffixes_every_output(workdir, capsys):
     tmp, cfgp = workdir
     assert run_cli(*base_args(cfgp), "--sizes", "all") == 0
-    targets = [c[-1] for c in ffmpeg_cmds(capsys)]
+    t = targets(ffmpeg_cmds(capsys))
     for name in ("reel", "square", "wide"):
-        assert any(t.endswith(f"out.{name}.mp4") for t in targets), name
+        assert any(x.endswith(f"out.{name}.mp4") for x in t), (name, t)
 
 
 @needs_raqm
@@ -164,11 +180,11 @@ def test_one_bad_size_does_not_stop_the_others(workdir, capsys):
     open(cfgp, "w", encoding="utf-8").write(json.dumps(cfg))
 
     code = run_cli(*base_args(cfgp), "--sizes", "all")
-    targets = [c[-1] for c in ffmpeg_cmds(capsys)]
-    assert code == 1                                   # كود الخروج بيبلّغ
-    assert any("out.reel.mp4" in t for t in targets)   # الباقي كمّل
-    assert any("out.wide.mp4" in t for t in targets)
-    assert not any("out.square.mp4" in t for t in targets)
+    t = targets(ffmpeg_cmds(capsys))
+    assert code == 1                              # كود الخروج بيبلّغ
+    assert any("out.reel.mp4" in x for x in t)    # الباقي كمّل
+    assert any("out.wide.mp4" in x for x in t)
+    assert not any("out.square.mp4" in x for x in t)
 
 
 @needs_raqm
