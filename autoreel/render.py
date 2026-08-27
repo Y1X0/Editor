@@ -1,6 +1,7 @@
 """تجميع الفيديو النهائي: قص + زوم لكل مقطع + حرق الكابشن."""
-import re, subprocess, os, shlex
+import re, shutil, subprocess, os, shlex
 
+from . import captions as CAP
 from . import graph as G
 from .cuts import frame_plan
 
@@ -135,21 +136,74 @@ def probe_source(path):
     return int(m.group(1)), int(m.group(2)), has_audio
 
 
-def build_base(src, segs, cfg, workdir, dry_run=False, src_info=None):
+def materialise_captions(cap_frames, total_frames, outdir):
     """
-    المقطع المقصوص المزوّم — صورة وصوت — بتشغيلة ffmpeg **وحدة**.
+    تسلسل صور **مفهرس بالإطار**: لكل إطار مخرَج ملف اسمه فهرس الإطار.
+
+    بيرجّع نمط المسار (`…/%06d.png`) الجاهز لـ
+    `-framerate FPS -start_number 0 -i <نمط>`.
+
+    ليش وصلات رمزية مش نسخ: الPNG الواحد بيتكرّر عبر كل إطارات كابشنه،
+    والنسخ بيضاعف القرص بعدد الإطارات. الوصلة ≈٣٢ بايت — قِسنا ١٠٨٠٠
+    وصلة = ٣٣٨ KiB بـ٠.٦٩s.
+
+    fallback للنسخ لما نظام الملفات ما بيدعم الوصلات (بعض تخزين أندرويد
+    المشترك). بنجرّب مرة وحدة مش لكل ملف: ١٠٨٠٠ محاولة استثناء بطيئة.
+
+    **ليش مش `concat` demuxer:** قاعدة زمنه للصور ثابتة على ١/٢٥ ثانية،
+    فكل حدّ كابشن بينقرّب لمضاعف ٤٠ms = نص إطار عند ٣٠fps. قِسناها:
+    خُمس الكابشنات كانت تبلّش إطارًا بدري.
+    """
+    os.makedirs(outdir, exist_ok=True)
+    seq = G.caption_sequence(cap_frames, total_frames)
+
+    # **كل صور التسلسل لازم تكون بنفس المقاس.** تسلسل الصور بياخد أبعاد
+    # التيار من أول ملف، وأي تغيّر بالنص بيقطع المخرَج: صور ٤٠٧×٢٠٨
+    # و٤٠٨×٢٠٨ (فرق بكسل واحد) أعطت ٧٣ إطار من ١٤٤.
+    #
+    # التبطين بيصير **مرة لكل كابشن مميّز** مش لكل إطار، فبتضل الوصلات
+    # هي اللي بتغطي التكرار.
+    box = CAP.caption_box(sorted({p for p in seq if p}))
+    padded = {}
+    pad_dir = os.path.join(outdir, "box")
+    os.makedirs(pad_dir, exist_ok=True)
+    for i, png in enumerate(sorted({p for p in seq if p})):
+        padded[png] = CAP.pad_to_box(png, os.path.join(pad_dir, f"{i:05d}.png"), box)
+    blank = None
+    if any(p is None for p in seq):
+        blank = CAP.blank_png(os.path.join(pad_dir, "blank.png"), box)
+
+    use_symlink = True
+    for n, png in enumerate(seq):
+        dst = os.path.join(outdir, f"{n:06d}.png")
+        target = os.path.abspath(padded[png] if png is not None else blank)
+        if use_symlink:
+            try:
+                os.symlink(target, dst)
+                continue
+            except (OSError, NotImplementedError, AttributeError):
+                use_symlink = False      # نظام ملفات ما بيدعمها — كمّل نسخًا
+        shutil.copy2(target, dst)
+    return os.path.join(outdir, "%06d.png")
+
+
+def build_output(src, segs, caps, cfg, out_path, workdir,
+                 dry_run=False, src_info=None):
+    """
+    المخرَج النهائي كامل — صورة وصوت وكابشن — بتشغيلة ffmpeg **وحدة**.
 
         [0:v] fps, select='between(n,…)', settb=1/fps, setpts=N, fps
               -> scale(eval=frame) لكل مقطع -> crop
         [0:a] aresample, asplit, atrim بفهرس العيّنة, asetpts, concat
+        [1:v] تسلسل صور مفهرس بالإطار -> overlay واحد
 
-    الصوت بيضل PCM جوا الرسم لحد المخرَج، فترميز AAC بيصير **مرة وحدة**.
-    هاد اللي بيلغي تراكم priming padding: قبل هيك كل مقطع كان بينرمّز
-    لحاله وبعدين `concat -c copy`، والتأخير بينضاف مع كل قطعة —
-    مقاس ≈١٩ms لكل قطعة، ١٥٢ms عند ٨ مقاطع.
+    التلاتة بينقصّوا على **نفس** خطة الإطارات، فما بيقدروا ينفصلوا.
+    ولا ترميز وسيط: الصوت بيضل PCM لحد المخرَج (ترميز AAC مرة وحدة)،
+    والصورة ما بتنرمّز إلا مرة.
 
-    حدود الصوت مشتقّة من **نفس** خطة الإطارات اللي بيقصّ عليها الفيديو،
-    فالمساران ما بيقدروا ينفصلوا.
+    الكابشن **overlay واحد** مش سلسلة لكل كابشن: السلسلة بتاكل الذاكرة
+    مع العدد (قِسنا ٩٤١ MiB عند ٤٠ كابشن و٢٧٧١ MiB عند ٢٠٠)، والتسلسل
+    المفهرس ثابت عند ~٨٠ MiB.
 
     الرسم بينكتب لملف وبينمرّر بـ`-filter_complex_script`: عند ٣٠٠ مقطع
     بيوصل عشرات الكيلوبايتات، وحدود سطر الأوامر على أندرويد أضيق من
@@ -158,10 +212,22 @@ def build_base(src, segs, cfg, workdir, dry_run=False, src_info=None):
     fps = G.validate_fps(cfg["output"]["fps"])
     plan = frame_plan(segs, fps)
     starts = G.start_frames(segs, fps)
+    total = sum(plan)
     sw, sh, has_audio = src_info or probe_source(src)
 
     name = os.path.basename(workdir) or "out"
+    inputs = ["-i", str(src)]
+    caption_inputs = None
+    if caps:
+        # الزمن بينتحوّل لفهارس إطارات **هون**، وبعدها ما بيرجع يظهر
+        # بمسار الكابشن أبدًا: الفهرس هو الزمن.
+        seq = materialise_captions(G.caption_frames(caps, fps, total), total,
+                                   os.path.join(workdir, "seq"))
+        inputs += ["-framerate", str(fps), "-start_number", "0", "-i", seq]
+        caption_inputs = {name: 1}
+
     graph, maps = G.build_graph(cfg, plan, starts, [(name, cfg)], sw, sh,
+                                caption_inputs=caption_inputs,
                                 with_audio=has_audio)
     gpath = os.path.join(workdir, "graph.txt")
     with open(gpath, "w", encoding="utf-8") as f:
@@ -172,8 +238,7 @@ def build_base(src, segs, cfg, workdir, dry_run=False, src_info=None):
         print(f"# {gpath}\n{graph}")
 
     _, vlabel, alabel = maps[0]
-    base = os.path.join(workdir, "base.mp4")
-    cmd = ["ffmpeg", "-y", "-loglevel", "error", "-i", src,
+    cmd = ["ffmpeg", "-y", "-loglevel", "error", *inputs,
            "-filter_complex_script", gpath, "-map", f"[{vlabel}]"]
     if alabel:
         cmd += ["-map", f"[{alabel}]"]
@@ -181,58 +246,6 @@ def build_base(src, segs, cfg, workdir, dry_run=False, src_info=None):
             "-preset", "veryfast", "-pix_fmt", "yuv420p"]
     if alabel:
         cmd += ["-c:a", "aac", "-b:a", "128k", "-ar", str(G.DEFAULT_SR), "-ac", "2"]
-    cmd.append(base)
+    cmd += ["-movflags", "+faststart", str(out_path)]
     run(cmd, dry_run=dry_run)
-    return base
-
-
-def burn_captions(base, caps, cfg, out_path, batch=60, workdir=None, dry_run=False):
-    """
-    يحرق الكابشن على دفعات — تجنّبًا لسلسلة overlay طويلة بتكسر ffmpeg
-    أو بتاكل الذاكرة على الموبايل.
-
-    `workdir` = وين تنكتب ملفات التمرير الوسيطة. مرّر مجلد العمل المؤقت
-    من `cli.py`. بدونه بتنكتب جنب ملف الإخراج.
-
-    لا تستعمل `os.path.dirname(out_path)` لحاله: مع `-o out.mp4` بترجّع
-    `""` فالملفات بتنكتب بمجلد الشغل وبتضل هناك بعد ما البرنامج يخلص.
-    """
-    if not caps:
-        run(["ffmpeg", "-y", "-loglevel", "error", "-i", base,
-             "-c", "copy", out_path], dry_run=dry_run)
-        return out_path
-
-    H = cfg["output"]["height"]
-    y = int(H * cfg["captions"]["y_ratio"])
-    cur = base
-    tmpdir = workdir or os.path.dirname(os.path.abspath(out_path))
-    stale = None            # تمريرة سابقة صارت غير لازمة
-
-    for bi in range(0, len(caps), batch):
-        chunk = caps[bi:bi + batch]
-        cmd = ["ffmpeg", "-y", "-loglevel", "error", "-i", cur]
-        for p, _, _ in chunk:
-            cmd += ["-i", p]
-        fc, last = [], "0:v"
-        for k, (_, s, e) in enumerate(chunk, start=1):
-            tag = f"v{k}"
-            fc.append(f"[{last}][{k}:v]overlay=x=(W-w)/2:y={y}-h/2:"
-                      f"enable='between(t,{s:.3f},{e:.3f})'[{tag}]")
-            last = tag
-        final = bi + batch >= len(caps)
-        nxt = out_path if final else os.path.join(tmpdir, f"pass{bi:05d}.mp4")
-        cmd += ["-filter_complex", ";".join(fc), "-map", f"[{last}]",
-                "-map", "0:a?", "-c:v", "libx264", "-crf", str(cfg["output"]["crf"]),
-                "-preset", "veryfast", "-pix_fmt", "yuv420p",
-                "-c:a", "copy", "-movflags", "+faststart", nxt]
-        run(cmd, dry_run=dry_run)
-        # التمريرة السابقة انقرأت خلص. كل واحدة فيديو كامل، فتركهن
-        # بيضاعف استهلاك القرص مع كل دفعة.
-        if stale and not dry_run:
-            try:
-                os.remove(stale)
-            except OSError:
-                pass
-        stale = None if final else nxt
-        cur = nxt
     return out_path

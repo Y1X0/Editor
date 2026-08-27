@@ -148,9 +148,9 @@ def test_caption_overlay_y_differs_per_size(workdir, capsys):
     tmp, cfgp = workdir
     run_cli(*base_args(cfgp), "--sizes", "all")
     import re
-    # `overlay=` بينتهي بـ"y=" كمان، فلازم regex مش split ساذجة
-    ys = {m for c in ffmpeg_cmds(capsys) if "-filter_complex" in c
-          for m in re.findall(r"y=(\d+)-h/2", c[c.index("-filter_complex") + 1])}
+    # الoverlay انتقل من `-filter_complex` بالسطر لملف الرسم المطبوع
+    _, gs = printed(capsys)
+    ys = {m for g in gs for m in re.findall(r"y=(\d+)-h/2", g)}
     assert len(ys) == 3, ys
 
 
@@ -196,16 +196,37 @@ def test_caption_outside_the_frame_aborts_that_size(workdir, capsys):
 
 
 @needs_raqm
-def test_captions_are_rendered_per_size_not_shared(workdir, capsys):
+def test_captions_are_rendered_per_size_not_shared(workdir, capsys, monkeypatch):
     """
-    الكابشن لازم ينرسم بعرض كل مقاس. لو انشارك، ملفات الPNG بتكون
-    نفسها — وهاد بالضبط الاشتقاق اللي رفضناه.
+    الكابشن لازم ينرسم بعرض كل مقاس. لو انشارك، بيرجع باگ النص المقصوص
+    من الباب الخلفي — `_fit` بتاخد العرض المتاح كمدخل أصلًا.
+
+    (الPNGات ما عادت تظهر بسطر الأمر: صار في مدخَل واحد هو تسلسل
+    الصور. فبنتجسّس على النداء نفسه.)
     """
+    from autoreel import captions as CAP
+    widths = []
+    real = CAP.build_caption_pngs
+    monkeypatch.setattr(CAP, "build_caption_pngs",
+                        lambda groups, cfg, W, outdir, **k: (
+                            widths.append((W, outdir.rsplit("/", 1)[-1])),
+                            real(groups, cfg, W, outdir, **k))[1])
     tmp, cfgp = workdir
     run_cli(*base_args(cfgp), "--sizes", "all")
-    pngs = {p for c in ffmpeg_cmds(capsys) for p in c if p.endswith(".png")}
-    dirs = {p.rsplit("/", 2)[-2] for p in pngs}
-    assert dirs == {"caps_reel", "caps_square", "caps_wide"}, dirs
+    assert len(widths) == 3, widths
+    assert {d for _, d in widths} == {"caps_reel", "caps_square", "caps_wide"}
+    assert len({w for w, _ in widths}) > 1, "كل المقاسات انرسمت بنفس العرض"
+
+
+def test_each_size_gets_its_own_caption_sequence(workdir, capsys):
+    """تسلسل الصور لازم يكون تحت مجلد المقاس، مش مشتركًا."""
+    tmp, cfgp = workdir
+    run_cli(*base_args(cfgp), "--sizes", "all")
+    seqs = [x for c in ffmpeg_cmds(capsys) for x in c if x.endswith("%06d.png")]
+    assert len(seqs) == 3, seqs
+    assert len(set(seqs)) == 3, "مقاسان بيتقاسموا نفس التسلسل"
+    for name in ("reel", "square", "wide"):
+        assert any(f"/{name}/seq/" in s for s in seqs), name
 
 
 # ============================ --preview-frames ============================

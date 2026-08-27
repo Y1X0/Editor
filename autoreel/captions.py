@@ -416,6 +416,47 @@ DEFAULT_BRIDGE_GAP = 0.45
 _EPS = 1e-6
 
 
+def blank_png(path, size):
+    """
+    صورة شفافة بالكامل بمقاس محدَّد — للإطارات اللي ما فيها كابشن.
+
+    تسلسل الصور المفهرس بالإطار بده ملفًا لكل فهرس: فهرس ناقص بيوقّف
+    التسلسل عنده (قِسناها: ١٢ إطار صاروا ٥ لما شلنا الملف رقم ٥).
+
+    **المقاس إلزامي ولازم يساوي مقاس باقي التسلسل** — شوف `pad_to_box`.
+    """
+    Image.new("RGBA", size, (0, 0, 0, 0)).save(path)
+    return path
+
+
+def caption_box(paths):
+    """أكبر عرض وأكبر ارتفاع بين صور الكابشن — صندوق التسلسل الموحّد."""
+    sizes = [Image.open(p).size for p in paths]
+    if not sizes:
+        return (2, 2)
+    return (max(w for w, _ in sizes), max(h for _, h in sizes))
+
+
+def pad_to_box(src, dst, box):
+    """
+    نفس صورة الكابشن، موسّطة داخل لوحة شفافة بمقاس `box`.
+
+    **ليش التوسيط بيحافظ على الشكل:** الoverlay بيوسّط الطبقة
+    (`x=(W-w)/2`, `y=Y-h/2`). لو كل الكابشنات موسّطة داخل صندوق موحّد،
+    وتوسّط الصندوق، بيطلع كل كابشن بنفس مكانه بالضبط.
+
+    **وليش التوحيد إلزامي:** تسلسل الصور بياخد أبعاد التيار من **أول
+    ملف**، وأي تغيّر مقاس بالنص بيقطع المخرَج. قِسناها: صور ٤٠٧×٢٠٨
+    و٤٠٨×٢٠٨ (فرق **بكسل واحد**) أعطت ٧٣ إطار من ١٤٤. توحيدها أعطى
+    ١٤٤/١٤٤.
+    """
+    im = Image.open(src).convert("RGBA")
+    canvas = Image.new("RGBA", box, (0, 0, 0, 0))
+    canvas.paste(im, ((box[0] - im.width) // 2, (box[1] - im.height) // 2))
+    canvas.save(dst)
+    return dst
+
+
 def build_caption_pngs(groups, cfg, W, outdir, karaoke=True,
                        bridge_gap=DEFAULT_BRIDGE_GAP):
     """

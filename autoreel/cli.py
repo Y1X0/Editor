@@ -44,10 +44,8 @@ def _one_export(name, cfg, src, segs, w2, out_path, work, a, multi,
         return (f"  {name:<8} {W}×{H}  fit={fit:<5} "
                 f"crop_bias={cfg.get('geometry', {}).get('crop_bias', 0.5)}  {out_path}")
 
-    base = R.build_base(src, segs, cfg, os.path.join(work, name),
-                        dry_run=a.dry_run, src_info=src_info)
-    R.burn_captions(base, caps, cfg, out_path,
-                    workdir=os.path.join(work, name), dry_run=a.dry_run)
+    R.build_output(src, segs, caps, cfg, out_path, os.path.join(work, name),
+                   dry_run=a.dry_run, src_info=src_info)
 
     mb = "" if a.dry_run else f" · {os.path.getsize(out_path)/1e6:.1f}MB"
     return f"  {name:<8} {W}×{H}  fit={fit:<5} خط={size}{mb}  {out_path}"

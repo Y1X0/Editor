@@ -101,8 +101,9 @@ def test_output_geometry_keys_reach_the_filter(cfg, key, alt):
 
 
 def test_output_crf_reaches_ffmpeg(cfg, tmp_path, capsys):
-    R.build_base("in.mp4", [(0.0, 1.0)], bumped(cfg, ["output", "crf"], 33),
-                 str(tmp_path), dry_run=True)
+    R.build_output("in.mp4", [(0.0, 1.0)], None,
+                   bumped(cfg, ["output", "crf"], 33),
+                   str(tmp_path / "o.mp4"), str(tmp_path), dry_run=True)
     assert "33" in capsys.readouterr().out
 
 
@@ -128,19 +129,22 @@ def test_cuts_min_gap_is_the_caption_bridge(cfg, caps_dir=None):
 
 def test_motion_enabled_flattens_the_zoom(cfg, tmp_path, capsys):
     segs = [(i, i + 0.5) for i in range(4)]
-    R.build_base("in.mp4", segs, bumped(cfg, ["motion", "enabled"], False),
-                 str(tmp_path), dry_run=True)
+    R.build_output("in.mp4", segs, None,
+                   bumped(cfg, ["motion", "enabled"], False),
+                   str(tmp_path / "o.mp4"), str(tmp_path), dry_run=True)
     off = capsys.readouterr().out
-    R.build_base("in.mp4", segs, cfg, str(tmp_path), dry_run=True)
+    R.build_output("in.mp4", segs, None, cfg, str(tmp_path / "o.mp4"),
+                   str(tmp_path), dry_run=True)
     assert off != capsys.readouterr().out
 
 
 def test_motion_zoom_cycle_reaches_the_filter(cfg, tmp_path, capsys):
-    R.build_base("in.mp4", [(0, 1), (1, 2)], cfg, str(tmp_path), dry_run=True)
+    R.build_output("in.mp4", [(0, 1), (1, 2)], None, cfg,
+                   str(tmp_path / "o.mp4"), str(tmp_path), dry_run=True)
     a = capsys.readouterr().out
-    R.build_base("in.mp4", [(0, 1), (1, 2)],
-                 bumped(cfg, ["motion", "zoom_cycle"], [1.0, 1.5]),
-                 str(tmp_path), dry_run=True)
+    R.build_output("in.mp4", [(0, 1), (1, 2)], None,
+                   bumped(cfg, ["motion", "zoom_cycle"], [1.0, 1.5]),
+                   str(tmp_path / "o.mp4"), str(tmp_path), dry_run=True)
     assert a != capsys.readouterr().out
 
 
@@ -208,9 +212,12 @@ def test_caption_max_words_changes_the_grouping(cfg):
 
 
 def test_caption_y_ratio_reaches_the_overlay(cfg, tmp_path, capsys):
-    caps = [(str(tmp_path / "a.png"), 0.0, 1.0)]
-    R.burn_captions("b.mp4", caps, bumped(cfg, ["captions", "y_ratio"], 0.5),
-                    str(tmp_path / "o.mp4"), workdir=str(tmp_path), dry_run=True)
+    png = tmp_path / "a.png"
+    from PIL import Image
+    Image.new("RGBA", (10, 10)).save(png)
+    R.build_output("in.mp4", [(0.0, 1.0)], [(str(png), 0.0, 1.0)],
+                   bumped(cfg, ["captions", "y_ratio"], 0.5),
+                   str(tmp_path / "o.mp4"), str(tmp_path), dry_run=True)
     y = int(cfg["output"]["height"] * 0.5)
     assert f"y={y}-h/2" in capsys.readouterr().out
 
