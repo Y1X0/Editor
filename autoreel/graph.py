@@ -204,34 +204,59 @@ def pan_offsets(cfg, zooms):
 DEFAULT_GEOMETRY = {"fit": "crop", "crop_bias": 0.5, "pad_blur": 24}
 
 
-def size_chain(cfg, plan, zooms, in_label, out_label):
+def scaled_dims(src_w, src_h, sw, sh):
+    """
+    أبعاد المصدر بعد `scale=sw:sh:force_original_aspect_ratio=increase`.
+
+    `increase` بتاخد **الأكبر** من نسبتي التغطية وبتقرّب لأقرب صحيح.
+    قِسناها على أربع حالات (منها نسب مختلفة عن المخرَج): ٥٦٠×٩٩٨ من
+    ٦٤٠×١١٣٨ بتعطي **٥٦١**×٩٩٨، و٦١٤×١٠٩٤ بتعطي **٦١٥**×١٠٩٤ —
+    و`round(src·s)` بتطابقهن بالضبط.
+    """
+    s = max(sw / src_w, sh / src_h)
+    return round(src_w * s), round(src_h * s)
+
+
+def size_chain(cfg, plan, zooms, in_label, out_label, src_w, src_h):
     """
     سلسلة مقاس واحد: زوم لكل مقطع ثم قصّ/تبطين.
 
     الزوم بينتنفّذ بـ`scale` بتعبير على **فهرس إطار المخرَج** `n`
-    و`eval=frame`. `crop` بتقيّم `x`/`y` لكل إطار افتراضيًا، فالمرساة
-    بتضل بتعابير ffmpeg على الأبعاد الفعلية (`(iw-W)/2`) زي اليوم —
-    مقاس إن `iw` بتتحدّث مع `scale` المتغيّر.
+    و`eval=frame`.
 
-    ليش المرساة تعبير مش رقم: `increase` ممكن تكبّر أكتر من `sw/sh` لو
-    النسبة اختلفت، فحسابها بأرقامنا بيغلط. هاد قرار قائم بـ
-    `segment_filter` وبينحافظ عليه هون.
+    **المرساة أرقام محسوبة بايثونيًا، مش `(iw-W)/2`.** هاد الفرق الوحيد
+    عن `segment_filter`، وهو إجباري:
+
+    `crop` بتقيّم `x`/`y` لكل إطار، بس `iw`/`ih` جواتهن **بتتقيّدوا وقت
+    ضبط الوصلة** وما بيتتبّعوا مقاس مدخَل بيتغيّر لكل إطار. قِسناها:
+    مع `scale` متغيّر (٥٤٠×٩٦٠ ثم ٦١٥×١٠٩٤) الإطار الناتج من
+    `x='(iw-540)/2'` **بيختلف** عن الناتج من الرقم الصحيح ٣٧ — يعني
+    `iw` ضلّت ٥٤٠.
+
+    بالمعمارية القديمة ما كانت مشكلة: كل مقطع تشغيلة ffmpeg مستقلة
+    بمقاس ثابت، فالتعبير بينتقيّم مرة وحدة على القيمة الصح. المسار
+    الواحد بيلغي هالفرضية، فلازم نحسب `increase` عنا — و`scaled_dims`
+    مقاسة إنها بتطابق ffmpeg.
     """
     W, H = cfg["output"]["width"], cfg["output"]["height"]
     g = {**DEFAULT_GEOMETRY, **cfg.get("geometry", {})}
     fit = g["fit"]
     off = offsets_of(plan)
     sws, shs = zoom_dims(cfg, zooms)
+    dims = [scaled_dims(src_w, src_h, w, h) for w, h in zip(sws, shs)]
     w_ex = piecewise(sws, off, plan)
     h_ex = piecewise(shs, off, plan)
 
     if fit == "pad":
         # الزوم على الخلفية بس — المقدّمة بتدخل كاملة فوقها.
         # مش punch-in على الشخص، وهاد مقصود (شوف CLAUDE.md).
+        bx = piecewise([(iw - W) // 2 for iw, _ in dims], off, plan)
+        by = piecewise([(ih - H) // 2 for _, ih in dims], off, plan)
         return (f"[{in_label}]split[bg{out_label}][fg{out_label}]; "
                 f"[bg{out_label}]scale=w='{w_ex}':h='{h_ex}':"
                 f"force_original_aspect_ratio=increase:eval=frame,"
-                f"crop={W}:{H},gblur=sigma={g['pad_blur']}[bgb{out_label}]; "
+                f"crop={W}:{H}:x='{bx}':y='{by}',"
+                f"gblur=sigma={g['pad_blur']}[bgb{out_label}]; "
                 f"[fg{out_label}]scale={W}:{H}:"
                 f"force_original_aspect_ratio=decrease:"
                 f"force_divisible_by=2[fgs{out_label}]; "
@@ -241,12 +266,14 @@ def size_chain(cfg, plan, zooms, in_label, out_label):
     if fit != "crop":
         raise ValueError(f"geometry.fit مش معروف: {fit!r} — المتاح: crop, pad")
 
-    dx = piecewise(pan_offsets(cfg, zooms), off, plan)
     bias = min(1.0, max(0.0, g["crop_bias"]))
+    pans = pan_offsets(cfg, zooms)
+    xs = [(iw - W) // 2 + dx for (iw, _), dx in zip(dims, pans)]
+    ys = [round((ih - H) * bias) for _, ih in dims]
     return (f"[{in_label}]scale=w='{w_ex}':h='{h_ex}':"
             f"force_original_aspect_ratio=increase:eval=frame,"
-            f"crop={W}:{H}:x='(iw-{W})/2+({dx})':y='(ih-{H})*{bias:.4f}',"
-            f"setsar=1[{out_label}]")
+            f"crop={W}:{H}:x='{piecewise(xs, off, plan)}':"
+            f"y='{piecewise(ys, off, plan)}',setsar=1[{out_label}]")
 
 
 # -------------------------------------------------------------- الكابشن
@@ -293,7 +320,8 @@ def caption_sequence(cap_frames, total_frames):
 
 # ------------------------------------------------------------ التجميع
 
-def build_graph(cfg, plan, starts, sizes, caption_inputs=None, sr=DEFAULT_SR):
+def build_graph(cfg, plan, starts, sizes, src_w, src_h,
+                caption_inputs=None, sr=DEFAULT_SR):
     """
     الرسم كامل.
 
@@ -315,7 +343,7 @@ def build_graph(cfg, plan, starts, sizes, caption_inputs=None, sr=DEFAULT_SR):
     for i, (name, scfg) in enumerate(sizes):
         zoomed = f"g{i}"
         parts.append(size_chain(scfg, plan, zoom_values(scfg, nseg),
-                                zlabels[i], zoomed))
+                                zlabels[i], zoomed, src_w, src_h))
         if caption_inputs and name in caption_inputs:
             k = caption_inputs[name]
             W, H = scfg["output"]["width"], scfg["output"]["height"]

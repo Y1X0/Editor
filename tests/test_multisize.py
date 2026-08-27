@@ -10,7 +10,7 @@ import sys
 
 import pytest
 
-from autoreel import cli as CLI, cuts as C
+from autoreel import cli as CLI, cuts as C, render as R
 from conftest import ROOT, needs_raqm
 
 DUR = 16.5
@@ -24,6 +24,9 @@ def workdir(tmp_path, monkeypatch):
     p = tmp_path / "config.json"
     p.write_text(json.dumps(cfg), encoding="utf-8")
     monkeypatch.setattr(C, "probe_duration", lambda _: DUR)
+    # نفس السبب: `probe_size` بدها ملف حقيقي، وأبعاد المصدر
+    # مدخَل لحساب المرساة مش الشي المفحوص هون.
+    monkeypatch.setattr(R, "probe_size", lambda _: (640, 1138))
     monkeypatch.chdir(tmp_path)
     return tmp_path, str(p)
 

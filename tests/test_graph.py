@@ -328,19 +328,50 @@ def test_zoom_disabled_means_no_zoom():
     assert G.zoom_values(cfg_of(BASE, **{"motion.enabled": False}), 4) == [1.0] * 4
 
 
-def test_size_chain_anchors_with_ffmpeg_expressions_not_our_numbers():
+def test_size_chain_never_anchors_with_iw_or_ih():
     """
-    `increase` ممكن تكبّر أكتر من `sw/sh` لو النسبة اختلفت، فالمرساة
-    لازم تنحسب على الأبعاد الفعلية. قرار قائم بـ`segment_filter`
-    وبينحافظ عليه.
+    **حارس انحدار على خلل حقيقي.**
+
+    `crop` بتقيّم `x`/`y` لكل إطار، بس `iw`/`ih` جواتهن بتتقيّدوا وقت
+    ضبط الوصلة وما بيتتبّعوا مقاس مدخَل متغيّر. قِسناها: مع `scale`
+    متغيّر، `x='(iw-540)/2'` أعطى إطارًا **مختلفًا** عن الرقم الصح ٣٧.
+    الأثر كان مقاطع الزوم العالي بتنقصّ من مكان غلط.
+
+    بالمعمارية القديمة التعبير كان صح (كل مقطع تشغيلة بمقاس ثابت).
+    بالمسار الواحد لازم أرقام محسوبة.
     """
-    c = G.size_chain(BASE, [5, 5], [1.0, 1.1], "z0", "g0")
-    assert "(iw-1080)/2" in c and "(ih-1920)*0.5000" in c
+    c = G.size_chain(BASE, [5, 5], [1.0, 1.1], "z0", "g0", 640, 1138)
+    x = re.search(r"crop=\d+:\d+:x='([^']+)':y='([^']+)'", c)
+    assert x, "ما لقيت تعبير القصّ"
+    assert "iw" not in x.group(1) and "ih" not in x.group(2)
+    assert "in_w" not in c and "in_h" not in c
+
+
+def test_size_chain_anchor_matches_the_scaled_dimensions():
+    """المرساة لازم تنحسب على أبعاد **بعد** `increase`، مش على sw/sh."""
+    cfg = cfg_of(BASE, **{"output.width": 540, "output.height": 960})
+    c = G.size_chain(cfg, [5], [1.14], "z0", "g0", 640, 1138)
+    iw, ih = G.scaled_dims(640, 1138, 614, 1094)
+    assert (iw, ih) == (615, 1094)
+    xs = [int(v) for v in re.findall(r"(-?\d+)\*between", 
+                                     re.search(r"x='([^']+)'", c).group(1))]
+    assert xs[0] == (615 - 540) // 2 + G.pan_offsets(cfg, [1.14])[0]
+
+
+@pytest.mark.parametrize("sw,sh,want", [
+    (540, 960, (540, 960)),
+    (594, 1056, (594, 1056)),
+    (560, 998, (561, 998)),
+    (614, 1094, (615, 1094)),
+])
+def test_scaled_dims_matches_ffmpeg_increase(sw, sh, want):
+    """قيم مقاسة من ffmpeg على مصدر ٦٤٠×١١٣٨ — منها حالتان بنسبة مختلفة."""
+    assert G.scaled_dims(640, 1138, sw, sh) == want
 
 
 def test_size_chain_uses_eval_frame():
     """بدونها الزوم بينتقيّم مرة وحدة وبينثبت على أول مقطع."""
-    assert "eval=frame" in G.size_chain(BASE, [5], [1.0], "z0", "g0")
+    assert "eval=frame" in G.size_chain(BASE, [5], [1.0], "z0", "g0", 640, 1138)
 
 
 def test_size_chain_pad_zooms_only_the_background():
@@ -349,7 +380,7 @@ def test_size_chain_pad_zooms_only_the_background():
     وبيلغي سبب وجود `pad`.
     """
     c = G.size_chain(cfg_of(BASE, **{"geometry.fit": "pad"}), [5], [1.1],
-                     "z0", "g0")
+                     "z0", "g0", 640, 1138)
     assert "gblur" in c and "eval=frame" in c
     assert c.count("eval=frame") == 1, "الزوم انطبق على المقدّمة كمان"
     assert "decrease" in c
@@ -358,45 +389,45 @@ def test_size_chain_pad_zooms_only_the_background():
 def test_size_chain_rejects_unknown_fit():
     with pytest.raises(ValueError, match="fit"):
         G.size_chain(cfg_of(BASE, **{"geometry.fit": "stretch"}), [5], [1.0],
-                     "z0", "g0")
+                     "z0", "g0", 640, 1138)
 
 
 # --------------------------------------------------- U5/U7: الرسم كامل
 
 def test_build_graph_makes_one_map_per_size():
     g, maps = G.build_graph(BASE, [5, 5], [0, 10],
-                            [("reel", BASE), ("square", BASE)])
+                            [("reel", BASE), ("square", BASE)], 640, 1138)
     assert [n for n, _, _ in maps] == ["reel", "square"]
     assert len({a for _, a, _ in maps}) == 2
     assert len({a for _, _, a in maps}) == 2, "مقاسان بيتقاسموا نفس تسمية الصوت"
 
 
 def test_build_graph_has_a_single_source_decode():
-    g, _ = G.build_graph(BASE, [5], [0], [("reel", BASE)] * 3)
+    g, _ = G.build_graph(BASE, [5], [0], [("reel", BASE)] * 3, 640, 1138)
     assert g.count("[0:v]") == 1 and g.count("[0:a]") == 1
 
 
 def test_build_graph_wires_captions_when_given():
-    g, maps = G.build_graph(BASE, [5], [0], [("reel", BASE)],
+    g, maps = G.build_graph(BASE, [5], [0], [("reel", BASE)], 640, 1138,
                             caption_inputs={"reel": 1})
     assert "[1:v]fps=30[cap0]" in g and "overlay" in g
     assert maps[0][1] == "m0"
 
 
 def test_build_graph_without_captions_maps_the_zoomed_stream():
-    g, maps = G.build_graph(BASE, [5], [0], [("reel", BASE)])
+    g, maps = G.build_graph(BASE, [5], [0], [("reel", BASE)], 640, 1138)
     assert "overlay" not in g and maps[0][1] == "g0"
 
 
 def test_build_graph_rejects_a_fractional_fps():
     with pytest.raises(ValueError, match="كسري"):
         G.build_graph(cfg_of(BASE, **{"output.fps": 29.97}), [5], [0],
-                      [("reel", BASE)])
+                      [("reel", BASE)], 640, 1138)
 
 
 def test_build_graph_rejects_overlapping_segments():
     with pytest.raises(ValueError, match="متداخلة"):
-        G.build_graph(BASE, [10, 10], [0, 5], [("reel", BASE)])
+        G.build_graph(BASE, [10, 10], [0, 5], [("reel", BASE)], 640, 1138)
 
 
 def test_u7_graph_is_long_enough_to_need_a_script_file():
@@ -406,11 +437,11 @@ def test_u7_graph_is_long_enough_to_need_a_script_file():
     """
     plan = [3] * 300
     starts = [i * 10 for i in range(300)]
-    g, _ = G.build_graph(BASE, plan, starts, [("reel", BASE)])
+    g, _ = G.build_graph(BASE, plan, starts, [("reel", BASE)], 640, 1138)
     assert len(g) > 20_000
 
 
 def test_caption_overlay_is_centred_at_the_configured_ratio():
-    g, _ = G.build_graph(BASE, [5], [0], [("reel", BASE)],
+    g, _ = G.build_graph(BASE, [5], [0], [("reel", BASE)], 640, 1138,
                          caption_inputs={"reel": 1})
     assert f"y={int(1920 * 0.72)}-h/2" in g

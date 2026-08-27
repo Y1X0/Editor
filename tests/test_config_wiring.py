@@ -83,6 +83,15 @@ def test_no_dead_keys_left_behind(raw):
 
 # --------------------------------------------------------------- output.*
 
+@pytest.fixture(autouse=True)
+def _no_probe(monkeypatch):
+    """
+    `build_base` بتقرا أبعاد المصدر (لازمة لمرساة القصّ بالمسار الواحد).
+    الملفات هون وهمية، والأبعاد مش الشي المفحوص — فبنثبّتها.
+    """
+    monkeypatch.setattr(R, "probe_size", lambda p: (640, 1138))
+
+
 @pytest.mark.parametrize("key,alt", [("width", 720), ("height", 1280),
                                      ("fps", 24)])
 def test_output_geometry_keys_reach_the_filter(cfg, key, alt):

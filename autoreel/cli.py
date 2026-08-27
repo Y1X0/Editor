@@ -4,7 +4,8 @@ from . import (transcribe as T, cuts as C, captions as CAP, render as R,
                exports as X)
 
 
-def _one_export(name, cfg, src, segs, w2, out_path, work, a, multi):
+def _one_export(name, cfg, src, segs, w2, out_path, work, a, multi,
+                src_size=None):
     """
     تصدير مقاس واحد. بيرجّع سطر ملخّص.
 
@@ -44,7 +45,7 @@ def _one_export(name, cfg, src, segs, w2, out_path, work, a, multi):
                 f"crop_bias={cfg.get('geometry', {}).get('crop_bias', 0.5)}  {out_path}")
 
     base = R.build_base(src, segs, cfg, os.path.join(work, name),
-                        dry_run=a.dry_run)
+                        dry_run=a.dry_run, src_size=src_size)
     R.burn_captions(base, caps, cfg, out_path,
                     workdir=os.path.join(work, name), dry_run=a.dry_run)
 
@@ -87,6 +88,10 @@ def main():
     try:
         # ---- محسوب مرة وحدة: مستقل تمامًا عن مقاس المخرَج ----
         dur = C.probe_duration(a.input)
+        # أبعاد المصدر لازمة لحساب مرساة القصّ بالمسار الواحد
+        # (`crop.iw` ما بتتتبّع مقاسًا متغيّرًا). بتنقرا **مرة وحدة**:
+        # مستقلة عن المقاس زي `probe_duration` بالضبط.
+        src_size = None if a.preview_frames else R.probe_size(a.input)
         print(f"[1/4] المدة الأصلية: {dur:.1f}s")
 
         # Whisper لازم للقص أو للكابشن. بدون الاتنين ما إله لزوم، وقبل
@@ -144,7 +149,8 @@ def main():
             os.makedirs(os.path.join(work, name), exist_ok=True)
             try:
                 rows.append(_one_export(name, cfg, a.input, segs, w2,
-                                        out_path, work, a, multi))
+                                        out_path, work, a, multi,
+                                        src_size=src_size))
             except Exception as e:
                 # فشل مقاس ما بيوقف الباقي — بس كود الخروج بيصير ≠ ٠.
                 failed.append(name)
