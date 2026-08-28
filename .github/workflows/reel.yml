@@ -8,8 +8,8 @@ name: reel
 on:
   workflow_dispatch:
     inputs:
-      drive:
-        description: "رابط Google Drive أو معرّف الملف"
+      source:
+        description: "رابط الفيديو — درايف، أو أي رابط مباشر http(s)"
         required: true
       size:
         description: "المقاس: reel | square | wide"
@@ -61,17 +61,48 @@ jobs:
           assert features.check('raqm'), 'Pillow بلا libraqm — الكابشن العربي بينكسر'
           print('raqm: ok')"
 
+      # مصدران: درايف (بيحتاج تعامل خاص مع صفحة التأكيد) أو أي رابط
+      # مباشر. التمييز على الرابط نفسه — ما في علم يتنسى.
       - name: تنزيل اللقطة
         env:
-          DRIVE: ${{ inputs.drive }}
+          SOURCE: ${{ inputs.source }}
         run: |
           set -euo pipefail
           mkdir -p footage
-          python tools/fetch_drive.py "$DRIVE" -o footage > /tmp/src_path
+          case "$SOURCE" in
+            *drive.google.com*|*docs.google.com*)
+              python tools/fetch_drive.py "$SOURCE" -o footage > /tmp/src_path ;;
+            http://*|https://*)
+              # الاسم من الرابط، منظَّف من أي مقطع مسار أو استعلام.
+              # الاسم من الرابط، بلا الاستعلام. أي شكل مش شكل ملف —
+              # فاضي، مسار، مخفي، `host:port`، أو بلا امتداد — بينستبدل.
+              name="$(basename "${SOURCE%%\?*}")"
+              case "$name" in ""|*/*|.*|*:*) name="source.mp4" ;; esac
+              case "$name" in *.*) ;; *) name="source.mp4" ;; esac
+              curl -fL --retry 3 --retry-delay 2 -o "footage/$name" "$SOURCE"
+              echo "footage/$name" > /tmp/src_path ;;
+            *)
+              # لا رابط ولا معرّف درايف واضح — بنجرّبه كمعرّف درايف.
+              python tools/fetch_drive.py "$SOURCE" -o footage > /tmp/src_path ;;
+          esac
           SRC="$(cat /tmp/src_path)"
-          [ -n "$SRC" ] || { echo "::error::ولا ملف فيديو من الرابط"; exit 1; }
+          [ -n "$SRC" ] || { echo "::error::ولا ملف انزّل من المصدر"; exit 1; }
           echo "SRC=$SRC" >> "$GITHUB_ENV"
           ls -lh "$SRC"
+
+      # رابط مشارَكة أو صفحة تسجيل دخول بتنزل كـHTML باسم .mp4 وبتمرق
+      # بصمت لحد ما ffmpeg يفشل بنص الترميز. الفحص إن الملف **بينفك**
+      # فعلًا وإله مدة موجبة — بيمسك الHTML والملف المقصوص سوا.
+      - name: تأكّد إنه فيديو حقيقي
+        run: |
+          set -euo pipefail
+          python -c "
+          import sys
+          sys.path.insert(0, '.')
+          from autoreel import cuts
+          w, h, has_audio, dur, tags = cuts.probe('$SRC')
+          assert dur > 0, 'مدة صفر'
+          print(f'✅ {w}x{h} · {dur:.1f}s · صوت={has_audio}')"
 
       - name: شغّل auto-reel
         env:
