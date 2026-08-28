@@ -448,3 +448,60 @@ def test_the_speech_level_is_the_same_for_mono_and_stereo_sources(tmp_path):
     assert abs(g_mono - g_stereo) < 0.005, \
         f"مونو {g_mono:.4f} وستيريو {g_stereo:.4f} مش نفس المستوى"
     assert clip_mono == 0 and clip_stereo == 0
+
+
+# ============================================ الطول مثبَّت بالبناء
+
+def test_the_mix_pins_the_exact_sample_count():
+    """
+    `apad,atrim=end_sample=N` لازم تكون بالرسم — بدونها الطول بيعتمد
+    على دلالة `duration` بـ`amix`، وهاي **بتفرق بين نسخ ffmpeg**.
+    """
+    plan = C.frame_plan(SEGS, FPS)
+    starts = G.start_frames(SEGS, FPS)
+    total = sum(plan) * (SR // FPS)
+    parts = G.audio_chain(FPS, starts, plan, ["ao0"],
+                          cues=_cues(), sfx_inputs=_inputs(_cues()))
+    mix = [p for p in parts if "amix=" in p]
+    assert mix, parts
+    assert f"apad,atrim=end_sample={total}" in mix[0], mix[0]
+
+
+@pytest.mark.parametrize("broken", ["", ":duration=shortest", ":duration=longest"])
+def test_the_length_survives_a_broken_amix_duration(rendered, tmp_path, broken):
+    """
+    **الحارس اللي كان ناقصًا.** المشروع كله مقاس على ffmpeg 7.0.2،
+    وعلى 6.1.1 `amix=duration=first` بتعطي **١٢٨٠ عيّنة أقل**
+    (٢٦.٧ms) — الصوت بينقصّ بصمت والأداة بتقول "تمّ بنجاح".
+
+    ما بنقدر نثبّت نسخة تانية هون، فمنحاكي الخلل: منبدّل دلالة
+    `duration` بالرسم ومنتأكد إن الطول **ما بيتغيّر**. لو الطول
+    بيعتمد على `amix`، وحدة من التلاتة بتفشل.
+
+    بلا التثبيت `duration=shortest` بتعطي ٦٨٠٨٠ بدل ٣٨٤٠٠٠ — مقيس.
+    """
+    plan = rendered["plan"]
+    starts = G.start_frames(SEGS, FPS)
+    cues = _cues()
+    inputs = _inputs(cues)
+    want = sum(plan) * (SR // FPS)
+
+    g, maps = G.build_graph(SCFG, plan, starts, [("reel", SCFG)], 320, 568,
+                            cues=cues, sfx_inputs=inputs)
+    g = g.replace(":duration=first", broken)
+    gp = str(tmp_path / "g.txt")
+    open(gp, "w", encoding="utf-8").write(g)
+
+    src = os.path.join(os.path.dirname(rendered["off"]), "source.mp4")
+    args = ["ffmpeg", "-y", "-loglevel", "error", "-i", src]
+    for a in sorted(inputs, key=inputs.get):
+        args += ["-i", S.asset(a)]
+    _, v, al = maps[0]
+    out = str(tmp_path / f"len{abs(hash(broken))}.mkv")
+    subprocess.run(args + ["-filter_complex_script", gp, "-map", f"[{v}]",
+                           "-map", f"[{al}]", "-c:v", "libx264", "-crf", "23",
+                           "-preset", "veryfast", "-pix_fmt", "yuv420p",
+                           "-c:a", "pcm_s16le", "-ac", "2", out],
+                   check=True, capture_output=True)
+    assert len(S.pcm(out)) == want, \
+        f"الطول بيعتمد على amix (duration{broken!r})"

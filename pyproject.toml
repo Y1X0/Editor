@@ -1,0 +1,68 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "auto-reel"
+version = "0.1.0"
+description = "محرر ريلز أوتوماتيكي عربي: قص الصمت + زوم + كابشن كاريوكي محروق"
+readme = "README.md"
+# النحو بينحلّ تحت 3.8، بس الطقم **مشغَّل على 3.11 بس**. الأرضية هون
+# ادعاء محافظ مش نتيجة قياس — نفس درس نسخة ffmpeg، فمذكور صراحة.
+requires-python = ">=3.9"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "y1x0" }]
+keywords = ["video", "ffmpeg", "arabic", "subtitles", "reels", "rtl"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Natural Language :: Arabic",
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Video :: Non-Linear Editor",
+]
+
+# ⚠️ `ffmpeg` تبعية خارجية ما بتنصّب من pip. **7.0+** — شوف README.
+dependencies = [
+    "Pillow>=10.0.0",
+    "faster-whisper>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[project.urls]
+Homepage = "https://github.com/y1x0/editor"
+
+# ---------------------------------------------------------------------------
+# ولا `[project.scripts]` — عمدًا، مش سهوًا.
+#
+# `pip install .` بينسخ حزمة `autoreel` لـsite-packages وبس. وبيانات
+# التشغيل التلاتة **برّا الحزمة** وبينحلّوا نسبةً لمكان تاني:
+#
+#   config.json      نسبةً للـcwd (افتراضي `-c`)
+#   fonts/…ttf       نسبةً للـcwd (مسار جوا config.json)
+#   assets/sfx/*.wav نسبةً لأب مجلّد الحزمة (`render.SFX_DIR`)
+#
+# فأمر `autoreel` مثبَّت بينكسر برّا جذر المستودع. وحط entry point
+# بيكسر بالتشغيل أسوأ من غيابه: بيوعد بشي ما بينشتغل.
+#
+# التشغيل المدعوم: استنسخ وشغّل من الجذر —
+#     python -m autoreel.cli in.mp4 -o out.mp4
+#
+# نقل البيانات جوا الحزمة (`importlib.resources`) شغل حقيقي مش سطر
+# toml: بيلمس `config.json` و`captions._font` و`render.SFX_DIR`
+# و`tests/`. مؤجَّل بقرار، مش منسي — `ISSUES.md` / PKG-1.
+# ---------------------------------------------------------------------------
+
+[tool.setuptools]
+packages = ["autoreel"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "golden: مقارنة بصورة مرجعية — حسّاسة لإصدار Pillow/HarfBuzz، عطّلها بـ -m \"not golden\"",
+    "slow: ترميز ffmpeg حقيقي — دقايق مش ثواني، عطّلها بـ -m \"not slow\"",
+    "sfx: قبول المؤثرات الصوتية على ناتج ffmpeg، عطّلها بـ -m \"not sfx\"",
+]

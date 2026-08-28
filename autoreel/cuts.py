@@ -2,6 +2,46 @@
 import subprocess, re
 
 
+# أدنى نسخة ffmpeg **مفحوصة**. أقل منها ما بتنمنع — بس بيطلع تحذير،
+# لأن ما بنقدر نعد بشي ما قِسناه.
+#
+# الحادثة اللي فرضت الفحص: كل أرقام المشروع مقاسة على 7.0.2، وطلع إن
+# `amix=duration=first` بتعطي **١٢٨٠ عيّنة أقل** على 6.1.1 — الصوت
+# بينقصّ ٢٦.٧ms بصمت والأداة بتقول "تمّ بنجاح". الطول انتثبّت بالبناء
+# بعدها (`graph.sfx_chain`)، بس الدرس أعمّ: **ادعاء "٧٤١ فحص أخضر"
+# بلا ذكر النسخة ادعاء ناقص.**
+VERIFIED_FFMPEG = (7, 0)
+MIN_FFMPEG = (6, 0)
+
+
+def ffmpeg_version():
+    """`(major, minor)` من `ffmpeg -version`، أو `None` لو ما انقرا."""
+    r = subprocess.run(["ffmpeg", "-version"], capture_output=True, text=True)
+    m = re.search(r"ffmpeg version n?(\d+)\.(\d+)", r.stdout)
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+def check_ffmpeg(warn=None):
+    """
+    بيتحقّق من نسخة ffmpeg. بيرجّع النسخة، وبيحذّر لو أقل من المفحوصة.
+
+    بيرمي لو أقل من `MIN_FFMPEG` — تحت هيك في فلاتر منعتمد عليها
+    ممكن ما تكون موجودة أصلًا، والفشل الصريح أوضح من مخرَج غريب.
+    """
+    v = ffmpeg_version()
+    if v is None:
+        return None
+    if v < MIN_FFMPEG:
+        raise RuntimeError(
+            f"ffmpeg {v[0]}.{v[1]} قديم جدًا — الحدّ الأدنى "
+            f"{MIN_FFMPEG[0]}.{MIN_FFMPEG[1]}")
+    if v < VERIFIED_FFMPEG and warn:
+        warn(f"⚠️  ffmpeg {v[0]}.{v[1]} — كل أرقام المشروع مقاسة على "
+             f"{VERIFIED_FFMPEG[0]}.{VERIFIED_FFMPEG[1]}+. "
+             f"المسار بيشتغل، بس السلوك تحتها غير متحقَّق منه.")
+    return v
+
+
 def probe(path):
     """
     `(عرض, ارتفاع, فيه_صوت, مدة)` بنداء `ffmpeg -i` **واحد**.

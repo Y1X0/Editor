@@ -5,3 +5,8 @@ __pycache__/
 out*.mp4
 test_in.mp4
 pass*.mp4
+
+# مخرجات البناء (`python -m build`) — بينتولّدوا وما بينتكمّتوا
+build/
+dist/
+*.egg-info/

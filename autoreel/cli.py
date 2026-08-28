@@ -71,6 +71,7 @@ def main():
                     help="إطار PNG من كل مقاس ووقّف — قبل ما تصرف ترميز")
     a = ap.parse_args()
 
+    C.check_ffmpeg(warn=lambda m: print(m, file=sys.stderr))
     root = json.load(open(a.config, encoding="utf-8"))
     if a.no_motion:
         root["motion"]["enabled"] = False

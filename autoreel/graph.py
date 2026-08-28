@@ -126,7 +126,8 @@ DEFAULT_SPEECH_GAIN = 0.70
 
 
 def sfx_chain(cues, inputs, in_label="acat", out_label="amixed",
-              speech_gain=DEFAULT_SPEECH_GAIN, sr=DEFAULT_SR):
+              speech_gain=DEFAULT_SPEECH_GAIN, sr=DEFAULT_SR,
+              total_samples=None):
     """
     مزج المؤثرات على الصوت المقصوص. **دالة نقية — نص داخل، نص برّا.**
 
@@ -163,6 +164,25 @@ def sfx_chain(cues, inputs, in_label="acat", out_label="amixed",
 
     ولا `alimiter`: مقيس إنه بيأخّر التيار **٢٣٩ عيّنة (٤.٩٨ms)**،
     فبيرجّع E2 من ١.٩٨ms لـ~٥ms.
+
+    **`total_samples` بتثبّت الطول بالبناء — ولا تشيلها.**
+
+    `apad,atrim=end_sample=N` بعد `amix`. بدونها الطول بيعتمد على
+    دلالة `duration` بـ`amix`، **وهاي بتفرق بين نسخ ffmpeg**: على
+    7.0.2 عنا `duration=first` بتعطي الطول الصح، وعلى 6.1.1 بتعطي
+    **١٢٨٠ عيّنة أقل** (٢٦.٧ms) — الصوت بينقصّ بصمت والأداة بتقول
+    "تمّ بنجاح".
+
+    مع التثبيت الطول مضبوط بكل الحالات، متحقَّق بمحاكاة `amix` مكسورة:
+
+        duration=first     -> 384000 ✅
+        duration=longest   -> 384000 ✅
+        duration=shortest  -> 384000 ✅   (بدون التثبيت: 68080)
+
+    وما بيغيّر ولا عيّنة لما الطول أصلًا صحيح (فرق ٠.٠٠٠٠٠٠٠٠).
+
+    نفس مبدأ المشروع: **الطول قرارنا مش قرار الفلتر** — زي
+    `-frames:v N` بالفيديو و`atrim` بفهرس العيّنة بالصوت.
     """
     if not cues:
         raise ValueError("ولا مؤثر — الاستدعاء نفسه غلط، شوف `audio_chain`")
@@ -197,9 +217,11 @@ def sfx_chain(cues, inputs, in_label="acat", out_label="amixed",
         tags.append(tag)
 
     parts.append(f"[{in_label}]volume={speech_gain:.4f}[spk]")
+    mix = (f"amix=inputs={len(tags) + 1}:duration=first:normalize=0")
+    if total_samples is not None:
+        mix += f",apad,atrim=end_sample={int(total_samples)}"
     parts.append("[spk]" + "".join(f"[{t}]" for t in tags)
-                 + f"amix=inputs={len(tags) + 1}:duration=first:normalize=0"
-                   f"[{out_label}]")
+                 + mix + f"[{out_label}]")
     return parts
 
 
@@ -250,7 +272,8 @@ def audio_chain(fps, starts, plan, out_labels, sr=DEFAULT_SR,
     tail = "acat"
     if cues:
         parts += sfx_chain(cues, sfx_inputs or {}, in_label="acat",
-                           out_label="amixed", speech_gain=speech_gain, sr=sr)
+                           out_label="amixed", speech_gain=speech_gain, sr=sr,
+                           total_samples=sum(plan) * spf)
         tail = "amixed"
 
     # قيد حقيقي: كل تسمية مخرَج بالفلتر بتنربط **مرة وحدة**.
