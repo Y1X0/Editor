@@ -101,7 +101,7 @@
         "y_ratio": 0.8
       },
       "geometry": {
-        "crop_bias": 0.3
+        "crop_bias": 0.25
       }
     },
     "wide": {

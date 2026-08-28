@@ -13,7 +13,7 @@ import pytest
 
 from measure import sdr_probe
 
-from autoreel import cli as CLI, cuts as C, render as R
+from autoreel import cli as CLI, cuts as C, exports as X, render as R
 from conftest import ROOT, needs_raqm
 
 DUR = 16.5
@@ -156,14 +156,22 @@ def test_each_size_uses_its_own_geometry(workdir, capsys):
     assert any("crop=1080:1920:" in g for g in gs)          # reel
     assert any("split[bgg0][fgg0]" in g for g in gs)        # wide -> pad
 
-    # square: `crop_bias=0.30` صار **رقمًا محسوبًا** مش تعبير `*0.3000`
+    # square: انحياز المربع صار **رقمًا محسوبًا** مش تعبير `*0.xxxx`
     # (المرساة انتقلت لبايثون لأن `crop.iw` ما بتتتبّع مقاسًا متغيّرًا).
-    # فبنفحص الأثر: القيمة لازم تطابق ٠.٣٠ وتفترق عن ٠.٥٠.
+    #
+    # **القيمة بتنقرا من الconfig الحقيقي مش مثبَّتة هون.** الادعاء
+    # المقصود هو الوصل — «انحياز المربع بيوصل الفلتر ومختلف عن
+    # الافتراضي» — مش رقم بعينه. تثبيت `0.30` كان بيفشّل الفحص عند كل
+    # معايرة، وهاد بيخلّي الرقم يبيّن كأنه عقد وهو مجرد إعداد.
+    bias = X.resolve(json.loads(open(cfgp, encoding="utf-8").read()),
+                     "square")["geometry"]["crop_bias"]
+    root_bias = json.loads(open(cfgp, encoding="utf-8").read())["geometry"]["crop_bias"]
+    assert bias != root_bias, "المربع لازم يدهس الانحياز، وإلا الفحص بلا معنى"
     sq = next(g for g in gs if "crop=1080:1080:" in g)
     y = int(re.search(r"y='(-?\d+)\*between", sq).group(1))
     ih = round(1138 * (1080 / 640))          # `increase` من مصدر ٦٤٠×١١٣٨
-    assert y == round((ih - 1080) * 0.30)
-    assert y != round((ih - 1080) * 0.50), "الانحياز ما وصل"
+    assert y == round((ih - 1080) * bias)
+    assert y != round((ih - 1080) * root_bias), "الانحياز ما وصل"
 
 
 @needs_raqm
@@ -298,7 +306,11 @@ def test_preview_uses_each_size_geometry(workdir, capsys):
     run_cli(*base_args(cfgp), "--sizes", "all", "--preview-frames")
     chains = " ".join(" ".join(c) for c in ffmpeg_cmds(capsys))
     assert "crop=1080:1920:" in chains
-    assert "*0.3000" in chains                  # crop_bias تبع المربع
+    # نفس السبب: الرقم من الconfig مش مثبَّت. المعاينة بتكتب الانحياز
+    # كتعبير ffmpeg (`(ih-H)*B`) لأنها مقطع واحد بمقاس ثابت.
+    bias = X.resolve(json.loads(open(cfgp, encoding="utf-8").read()),
+                     "square")["geometry"]["crop_bias"]
+    assert f"*{bias:.4f}" in chains              # crop_bias تبع المربع
     assert "split[bg][fg]" in chains            # pad تبع العريض
 
 
