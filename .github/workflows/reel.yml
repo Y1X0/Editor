@@ -1,0 +1,129 @@
+name: reel
+
+# شغّل الأداة على فيديو، ارفع المخرَج للدلو، اطبع الرابط العام.
+#
+# هاد كل شي. ولا تسجيل بقاعدة بيانات، ولا نشر، ولا موافقات — الهدف
+# تشوف مخرَج الأداة بعينك بلا ما تشغّل شي محليًا.
+
+on:
+  workflow_dispatch:
+    inputs:
+      drive:
+        description: "رابط Google Drive أو معرّف الملف"
+        required: true
+      size:
+        description: "المقاس: reel | square | wide"
+        default: "reel"
+      srt:
+        description: "مسار SRT بدل Whisper (فاضي = Whisper)"
+        default: ""
+
+permissions:
+  contents: read
+
+env:
+  # نفس الدلو اللي بيقرا منه rsdf — القيم من render.yaml تبعه.
+  BUCKET: content-factory-media
+  S3_ENDPOINT: https://oidhfzckpnbpnlofmwnh.storage.supabase.co/storage/v1/s3
+  PUBLIC_BASE: https://oidhfzckpnbpnlofmwnh.supabase.co/storage/v1/object/public/content-factory-media
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      # بناء ثابت 7.0.2 — مش حزمة أوبنتو (6.1.1)، اللي بتعطي ٤ فحوص
+      # فاشلة. كل أرقام المشروع مقاسة على هالنسخة.
+      - name: تنصيب ffmpeg ثابت
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/ff.tar.xz \
+            https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
+          mkdir -p /tmp/ff && tar -xJf /tmp/ff.tar.xz -C /tmp/ff --strip-components=1
+          sudo install -m755 /tmp/ff/ffmpeg /usr/local/bin/ffmpeg
+          ffmpeg -version | head -1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: تنصيب المشروع
+        run: |
+          set -euo pipefail
+          pip install -r requirements.txt boto3
+          # بلا raqm الكابشن العربي بيطلع مربعات فاضية — والفشل هون أوضح
+          # من فيديو مرمَّز بنص مكسور.
+          python -c "
+          from PIL import features
+          assert features.check('raqm'), 'Pillow بلا libraqm — الكابشن العربي بينكسر'
+          print('raqm: ok')"
+
+      - name: تنزيل اللقطة
+        env:
+          DRIVE: ${{ inputs.drive }}
+        run: |
+          set -euo pipefail
+          mkdir -p footage
+          python tools/fetch_drive.py "$DRIVE" -o footage > /tmp/src_path
+          SRC="$(cat /tmp/src_path)"
+          [ -n "$SRC" ] || { echo "::error::ولا ملف فيديو من الرابط"; exit 1; }
+          echo "SRC=$SRC" >> "$GITHUB_ENV"
+          ls -lh "$SRC"
+
+      - name: شغّل auto-reel
+        env:
+          SIZE: ${{ inputs.size }}
+          SRT: ${{ inputs.srt }}
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          ARGS=(python -m autoreel.cli "$SRC" --sizes "$SIZE" -o out/reel.mp4)
+          # `[ -n "$X" ] && …` تحت `set -e` بتقتل الخطوة لما X فاضية.
+          if [ -n "$SRT" ]; then ARGS+=(--srt "$SRT"); fi
+          "${ARGS[@]}"
+          # مقاس واحد = المخرَج بالاسم زي ما هو، بلا لاحقة (exports.output_path).
+          test -s out/reel.mp4
+          ls -lh out/reel.mp4
+
+      - name: ارفع للدلو
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.MEDIA_S3_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.MEDIA_S3_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ vars.MEDIA_S3_REGION || 'us-east-1' }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          python - <<'PY' | tee /tmp/url
+          import os, boto3
+          key = f"autoreel/{os.environ['RUN_ID']}/reel.mp4"
+          boto3.client("s3", endpoint_url=os.environ["S3_ENDPOINT"]).upload_file(
+              "out/reel.mp4", os.environ["BUCKET"], key,
+              # بلا هاد boto3 بيحط application/octet-stream، والمتصفّح
+              # بينزّل الملف بدل ما يشغّله.
+              ExtraArgs={"ContentType": "video/mp4"},
+          )
+          print(f"{os.environ['PUBLIC_BASE']}/{key}")
+          PY
+          echo "URL=$(cat /tmp/url)" >> "$GITHUB_ENV"
+
+      # «الرفع نجح» مش دليل إن الرابط عام: دلو خاص بيقبل الكتابة
+      # وبيرجّع 403 لأي زائر. الفحص مجهول الهوية عمدًا.
+      - name: تأكّد إن الرابط بيفتح
+        run: |
+          set -euo pipefail
+          code=$(curl -s -o /dev/null -w '%{http_code}' -I "$URL")
+          ctype=$(curl -s -o /dev/null -w '%{content_type}' -I "$URL")
+          echo "HTTP $code · $ctype"
+          [ "$code" = "200" ] || { echo "::error::الرابط رجّع $code — الدلو مش عام"; exit 1; }
+
+      - name: الرابط
+        run: |
+          {
+            echo "## الريل جاهز"
+            echo ""
+            echo "$URL"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "$URL"
