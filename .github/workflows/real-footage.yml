@@ -1,0 +1,192 @@
+name: real-footage
+
+# تشغيل الأداة على لقطات حقيقية بدون ما يشغّل حدا شي محليًا.
+#
+# ليش موجود: كل اختبارات المشروع مبنية على mp4 مولَّد من ffmpeg — أنظف
+# مدخل ممكن: بلا دوران، CFR، 48kHz، بلا ملف ألوان. الملف الحقيقي مش
+# عيّنة، هو **صنف مدخلات جديد**. هالتدفّق بيخلّيه قابلًا للإعادة كل مرة
+# ينتصلّح شي.
+#
+# المدخل: أصل مرفوع على release. الافتراضي تاق `test-input`.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "تاق الrelease اللي فيه الملف"
+        default: "test-input"
+      asset:
+        description: "اسم الأصل (فاضي = أول أصل بالrelease)"
+        default: ""
+      sizes:
+        description: "المقاسات: reel | reel,square,wide | all"
+        default: "all"
+      srt:
+        description: "مسار SRT بدل Whisper (فاضي = Whisper)"
+        default: ""
+      full_export:
+        description: "شغّل الترميز الكامل بعد المعاينة"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      # ---------------------------------------------------------------
+      # ffmpeg: بناء ثابت، **مش** حزمة التوزيعة.
+      # نسخة أوبنتو ٦.١.١، والمشروع كل أرقامه مقاسة على 7.0.2 — وهاد
+      # بالضبط الفرق اللي أعطى ٤ فحوص فاشلة (شوف README / فحص النسخة).
+      # والبناء الثابت بلا `ffprobe` كمان، فبيفحص قاعدة PR-1 مجانًا.
+      # ---------------------------------------------------------------
+      - name: تنصيب ffmpeg ثابت
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/ff.tar.xz \
+            https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
+          mkdir -p /tmp/ff && tar -xJf /tmp/ff.tar.xz -C /tmp/ff --strip-components=1
+          sudo install -m755 /tmp/ff/ffmpeg /usr/local/bin/ffmpeg
+          echo "FFMPEG_VERSION=$(ffmpeg -version | head -1)" >> "$GITHUB_ENV"
+          ffmpeg -version | head -1
+          # القاعدة: النتيجة بتنذكر مع النسخة.
+          echo "### ffmpeg" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          ffmpeg -version | head -1 >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: تنصيب المشروع
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libraqm0
+          pip install -r requirements.txt -r requirements-dev.txt
+          # بلا raqm الكابشن العربي بيطلع مربعات فاضية — والفشل هون
+          # أوضح من فيديو مرمَّز بنص مكسور.
+          python -c "
+          from PIL import features
+          ok = features.check('raqm')
+          print('raqm:', ok)
+          assert ok, 'Pillow بلا libraqm — الكابشن العربي بينكسر'"
+
+      # ---------------------------------------------------------------
+      # البند ١: تنزيل الملف
+      # ---------------------------------------------------------------
+      - name: تنزيل اللقطة من الrelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          ASSET: ${{ inputs.asset }}
+        run: |
+          set -euo pipefail
+          mkdir -p footage
+          if [ -n "$ASSET" ]; then
+            gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --pattern "$ASSET" --dir footage --clobber
+          else
+            gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --dir footage --clobber
+          fi
+          ls -lh footage
+          # أول ملف فيديو — الأسماء فيها فراغات، فلا تفكّها بالكلمات.
+          find footage -maxdepth 1 -type f \
+            \( -iname '*.mov' -o -iname '*.mp4' -o -iname '*.m4v' \) \
+            -print0 | head -z -n1 | tr -d '\0' > /tmp/src_path
+          SRC="$(cat /tmp/src_path)"
+          [ -n "$SRC" ] || { echo "::error::ولا ملف فيديو بالrelease '$TAG'"; exit 1; }
+          echo "SRC=$SRC" >> "$GITHUB_ENV"
+          echo "اللقطة: $SRC"
+
+      # ---------------------------------------------------------------
+      # البند ١: التقرير التشخيصي — قبل أي ترميز
+      # ---------------------------------------------------------------
+      - name: تقرير المصدر
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          python tools/probe_report.py "$SRC" --json > out/probe.json
+          python tools/probe_report.py "$SRC" | tee out/probe.md
+          cat out/probe.md >> "$GITHUB_STEP_SUMMARY"
+
+      # ---------------------------------------------------------------
+      # البند ٢: هل فرضياتنا عن المصدر مطابقة للواقع؟
+      #
+      # **بيحذّر ولا بيوقف** — عمدًا، لحد ما `SOURCE-SPEC.md` تنتنفّذ.
+      # هدف هالتشغيلة إن نشوف المخرَج الغلط بعينّا، مش نمنع إنتاجه.
+      # بعد التنفيذ بيصير `cli` نفسها بترمي، وهالخطوة بتصير زايدة.
+      # ---------------------------------------------------------------
+      - name: فحص الفرضيات عن المصدر
+        run: |
+          set -euo pipefail
+          python - <<'PY' | tee -a "$GITHUB_STEP_SUMMARY"
+          import json, os
+          r = json.load(open("out/probe.json"))
+          if r["probe_matches_reality"]:
+              print("\n✅ `cuts.probe` مطابقة لللي بيوصل الفلاتر.")
+          else:
+              print(f"\n⚠️ **فرضية مكسورة** — `probe` بترجّع "
+                    f"`{tuple(r['probe_returns'])}` وffmpeg بيسلّم "
+                    f"`{tuple(r['delivered_size'])}`. "
+                    f"التأطير رح يطلع غلط **بلا فشل**. `SOURCE-SPEC.md`.")
+              print(f"::warning::probe={r['probe_returns']} "
+                    f"delivered={r['delivered_size']}")
+          PY
+
+      # ---------------------------------------------------------------
+      # البند ٣: إطارات معاينة — بلا ترميز
+      # ---------------------------------------------------------------
+      - name: إطارات المعاينة
+        env:
+          SIZES: ${{ inputs.sizes }}
+          SRT: ${{ inputs.srt }}
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          ARGS=(python -m autoreel.cli "$SRC" --sizes "$SIZES"
+                --preview-frames -o out/preview.mp4)
+          # `[ -n "$X" ] && ...` تحت `set -e` بتقتل الخطوة لما X فاضية:
+          # آخر أمر بيرجّع ١. `if` مش اختصارًا.
+          if [ -n "$SRT" ]; then ARGS+=(--srt "$SRT"); fi
+          "${ARGS[@]}" 2>&1 | tee out/preview.log
+
+      # ---------------------------------------------------------------
+      # البند ٤: الترميز الكامل
+      # ---------------------------------------------------------------
+      - name: التصدير الكامل
+        if: ${{ inputs.full_export }}
+        env:
+          SIZES: ${{ inputs.sizes }}
+          SRT: ${{ inputs.srt }}
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          ARGS=(python -m autoreel.cli "$SRC" --sizes "$SIZES" -o out/reel.mp4)
+          if [ -n "$SRT" ]; then ARGS+=(--srt "$SRT"); fi
+          "${ARGS[@]}" 2>&1 | tee out/export.log
+          {
+            echo ""
+            echo "### مخرجات التصدير"
+            echo '```'
+            grep -E '^\[|^  |^✅|^⚠️' out/export.log || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # الملفات هي الحكم — الأرقام ما بتقول إذا التأطير حلو.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: real-footage-out
+          path: |
+            out/**
+          retention-days: 14
+          if-no-files-found: warn
