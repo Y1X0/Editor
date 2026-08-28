@@ -27,7 +27,7 @@
     "crop_bias": 0.5,
     "pad_blur": 24,
     "tonemap": "mobius",
-    "tonemap_npl": 1000
+    "tonemap_npl": 700
   },
   "captions": {
     "enabled": true,
