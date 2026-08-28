@@ -18,7 +18,9 @@ import os
 
 import pytest
 
-from autoreel import captions as CAP, cuts as C, exports as X, render as R
+from measure import sdr_probe
+
+from autoreel import captions as CAP, cuts as C, exports as X, graph as G, render as R
 from conftest import ROOT, needs_raqm, words
 
 
@@ -67,6 +69,7 @@ def test_no_dead_keys_left_behind(raw):
         "cuts.min_gap", "cuts.pad", "cuts.min_seg",
         "motion.enabled", "motion.zoom_cycle", "motion.pan_px",
         "geometry.fit", "geometry.crop_bias", "geometry.pad_blur",
+        "geometry.tonemap", "geometry.tonemap_npl",
         "captions.enabled", "captions.font", "captions.size",
         "captions.max_words", "captions.color", "captions.highlight",
         "captions.box", "captions.y_ratio",
@@ -91,7 +94,8 @@ def _no_probe(monkeypatch):
     `build_base` بتقرا أبعاد المصدر (لازمة لمرساة القصّ بالمسار الواحد).
     الملفات هون وهمية، والأبعاد مش الشي المفحوص — فبنثبّتها.
     """
-    monkeypatch.setattr(R, "probe_source", lambda p: (640, 1138, True))
+    monkeypatch.setattr(R, "probe_source_full",
+                        sdr_probe(640, 1138, True))
 
 
 @pytest.mark.parametrize("key,alt", [("width", 720), ("height", 1280),
@@ -167,6 +171,23 @@ def test_geometry_fit_switches_the_whole_chain(cfg):
     a = R.segment_filter(cfg)
     b = R.segment_filter(bumped(cfg, ["geometry", "fit"], "pad"))
     assert "split[bg][fg]" in b and "split" not in a
+
+
+@pytest.mark.parametrize("key,alt", [("tonemap", "hable"), ("tonemap_npl", 250)])
+def test_geometry_tonemap_keys_reach_the_chain(cfg, key, alt):
+    """
+    مفتاحا الـtonemap بينقروا من `geometry` وبينوصلوا `build_graph`.
+
+    المصدر هون **لازم يكون HDR** — بغيره السلسلة بترجع فاضية والمفتاحان
+    ما بيغيّروا شي، فالفحص بيمرّ على مفتاح ميت.
+    """
+    hdr = {"trc": "arib-std-b67", "primaries": "bt2020", "matrix": "bt2020nc",
+           "hdr": True, "bits": 10, "pix_fmt": "yuv420p10le", "range": "tv"}
+    a, _ = G.build_graph(cfg, [10], [0], [("reel", cfg)], 1080, 1920,
+                         with_audio=False, colors=hdr)
+    b, _ = G.build_graph(bumped(cfg, ["geometry", key], alt), [10], [0],
+                         [("reel", cfg)], 1080, 1920, with_audio=False, colors=hdr)
+    assert a != b, f"geometry.{key} ما وصل سلسلة الـtonemap"
 
 
 def test_geometry_crop_bias_moves_the_window(cfg):

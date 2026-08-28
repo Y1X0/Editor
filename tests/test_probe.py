@@ -42,10 +42,14 @@ def src(tmp_path_factory):
 # ------------------------------------------------------------- القراءة
 
 def test_probe_reads_everything_in_one_call(src):
-    w, h, has_audio, dur = C.probe(src["path"])
+    w, h, has_audio, dur, colors = C.probe(src["path"])
     assert (w, h) == (320, 568)
     assert has_audio is True
     assert dur == pytest.approx(NFRAMES / FPS, abs=0.01)
+    # مصدر الطقم مولَّد بلا وسوم ألوان — و`hdr=False` هون **نتيجة**
+    # مش افتراض: بلا وسوم يعني ما بنعرف، وما بنعرف مش HDR.
+    assert colors["hdr"] is False
+    assert colors["bits"] == 8
 
 
 def test_probe_duration_matches_the_full_probe(src):

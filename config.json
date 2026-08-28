@@ -25,7 +25,9 @@
   "geometry": {
     "fit": "crop",
     "crop_bias": 0.5,
-    "pad_blur": 24
+    "pad_blur": 24,
+    "tonemap": "mobius",
+    "tonemap_npl": 1000
   },
   "captions": {
     "enabled": true,

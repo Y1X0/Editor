@@ -11,6 +11,8 @@ import sys
 
 import pytest
 
+from measure import sdr_probe
+
 from autoreel import cli as CLI, cuts as C, render as R
 from conftest import ROOT, needs_raqm
 
@@ -27,7 +29,8 @@ def workdir(tmp_path, monkeypatch):
     monkeypatch.setattr(C, "probe_duration", lambda _: DUR)
     # نفس السبب: `probe_size` بدها ملف حقيقي، وأبعاد المصدر
     # مدخَل لحساب المرساة مش الشي المفحوص هون.
-    monkeypatch.setattr(R, "probe_source", lambda _: (640, 1138, True))
+    monkeypatch.setattr(R, "probe_source_full",
+                        sdr_probe(640, 1138, True))
     monkeypatch.chdir(tmp_path)
     return tmp_path, str(p)
 

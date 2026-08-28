@@ -107,11 +107,59 @@ def offsets_of(plan):
 
 # --------------------------------------------------------------- الجذع
 
-def video_stem(fps, starts, plan, out_label="stem"):
-    """`[0:v]` -> تيار مقصوص ومرقّم على شبكة الإطارات."""
+# معايرة الـtonemap. `npl` = ذروة الإضاءة الاسمية بالنِت.
+#
+# **١٠٠٠ هي القيمة الاسمية لـHLG، مش رقمًا معايَرًا على لقطة.** وهاد
+# فرق مهم: قِسنا السلسلة عند ١٠٠ فطلعت نتيجتان مريحتان (لا تأثير على
+# SDR، وأبيض الكابشن بينجو) والاتنين **غلط** — شوف `CLAUDE.md`،
+# «أداة القياس بتنكسر أكتر من الكود».
+DEFAULT_NPL = 1000
+DEFAULT_TONEMAP = "mobius"
+
+
+def tonemap_chain(colors, npl=DEFAULT_NPL, op=DEFAULT_TONEMAP):
+    """
+    HLG/PQ ‏BT.2020 -> SDR BT.709. **بترجّع `""` لمصدر مش HDR.**
+
+    الشرط مش تحسينًا، هو **شرط صحّة**: مقيس إن نفس السلسلة على مصدر
+    SDR بتدمّره (‎Y ١٠١.٣ -> ٧٠.٤ عند `npl=1000`). ومصدر بلا وسوم
+    بيرمي `code 3074: no path between colorspaces`. فالسلسلة بتنطبّق
+    **فقط** لما الوسوم تقول HLG أو PQ صراحة.
+
+    `zscale` هي الخيار الوحيد المتاح: `libplacebo` مش بالبناء الثابت
+    اللي المشروع بيستهدفه، و`colorspace` بترفض `arib-std-b67` أصلًا
+    (`Unsupported input transfer characteristics 18`) — بتفشل بصوت،
+    وهاد مقبول بس ما بينفع.
+
+    **`t=linear` قبل `tonemap` إلزامية.** بدونها `tonemap` بتشتغل بلا
+    خطأ ولا تحذير وبتعطي نتيجة **أسوأ من لا شي** — بتفترض ضوءًا خطّيًا
+    وما بتتحقّق. فخّ صامت.
+
+    و`tin=` صريحة عمدًا: ما منثق بوسم الحاوية لتحديد المدخل، منعلنه.
+    """
+    if not colors or not colors.get("hdr"):
+        return ""
+    trc = colors["trc"]
+    return (f"zscale=tin={trc}:t=linear:npl={int(npl)},"
+            f"format=gbrpf32le,"
+            f"zscale=p=bt709,"
+            f"tonemap={op}:desat=0,"
+            f"zscale=t=bt709:m=bt709:r=tv,"
+            f"format=yuv420p")
+
+
+def video_stem(fps, starts, plan, out_label="stem", tonemap=""):
+    """
+    `[0:v]` -> تيار مقصوص ومرقّم على شبكة الإطارات.
+
+    الـtonemap بينحط **بالجذع**: مرة وحدة قبل `split`، فكل المقاسات
+    بتاخد نفس التحويل بالتعريف مش بالصدفة. وبعد `select` عشان ما
+    نحوّل إطارات رح تنشال أصلًا.
+    """
     assert_disjoint(starts, plan)
+    tm = f",{tonemap}" if tonemap else ""
     return (f"[0:v]fps={fps},select='{select_expr(starts, plan)}',"
-            f"settb=1/{fps},setpts=N,fps={fps}[{out_label}]")
+            f"settb=1/{fps},setpts=N,fps={fps}{tm}[{out_label}]")
 
 
 def split_chain(src_label, labels):
@@ -442,7 +490,7 @@ def caption_sequence(cap_frames, total_frames):
 def build_graph(cfg, plan, starts, sizes, src_w, src_h,
                 caption_inputs=None, sr=DEFAULT_SR, with_audio=True,
                 cues=None, sfx_inputs=None,
-                speech_gain=DEFAULT_SPEECH_GAIN):
+                speech_gain=DEFAULT_SPEECH_GAIN, colors=None):
     """
     الرسم كامل.
 
@@ -460,7 +508,16 @@ def build_graph(cfg, plan, starts, sizes, src_w, src_h,
 
     zlabels = [f"z{i}" for i in range(nout)]
     alabels = [f"ao{i}" for i in range(nout)] if with_audio else [None] * nout
-    parts = [video_stem(fps, starts, plan), split_chain("stem", zlabels)]
+    # المصدر بينتطبّع لـSDR BT.709 **قبل** `split`، فالكابشن بينحط على
+    # قاعدة مطبَّعة بكل المقاسات. الترتيب مقصود: overlay بعد tonemap،
+    # لأن الـtonemapper ما بيميّز بكسل الكابشن عن بكسل المشهد فبيقرا
+    # أبيض الكابشن كوميض ١٠٠٠-نِت وبيضغطه (٢٣٥ -> ١٥١ مقيسة).
+    g = cfg.get("geometry", {})
+    tm = tonemap_chain(colors,
+                       npl=g.get("tonemap_npl", DEFAULT_NPL),
+                       op=g.get("tonemap", DEFAULT_TONEMAP))
+    parts = [video_stem(fps, starts, plan, tonemap=tm),
+             split_chain("stem", zlabels)]
     if with_audio:
         parts += audio_chain(fps, starts, plan, alabels, sr=sr,
                              cues=cues, sfx_inputs=sfx_inputs,

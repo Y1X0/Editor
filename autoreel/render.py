@@ -208,8 +208,57 @@ def probe_source(path):
 
 
 def probe_source_full(path):
-    """`(عرض, ارتفاع, فيه_صوت, مدة)` — النداء الواحد كامل."""
+    """`(عرض, ارتفاع, فيه_صوت, مدة, ألوان)` — النداء الواحد كامل."""
     return C.probe(path)
+
+
+# **ولا `-color_primaries/-color_trc/-colorspace` على المخرَج — عمدًا.**
+#
+# جرّبناهن وانحذفوا: `zscale=t=bt709:m=bt709:r=tv` بآخر سلسلة الـtonemap
+# بتضبط خصائص الإطار، وffmpeg بيمرّرها للمرمِّز. القياس:
+#
+#     مع  -color_* -> yuv420p(tv, bt709, progressive)
+#     بلا -color_* -> yuv420p(tv, bt709, progressive)
+#     والملفان **متطابقان بايت-ببايت**
+#
+# فحص الطفرة أثبتها: شيلهن وكل الفحوص الـ١٢ بتضل خضراء. وإعداد ما
+# بيغيّر شي هو إما ميت أو مفصول — نفس قاعدة `test_config_wiring`.
+#
+# ووسمهن **بلا شرط** أسوأ: جرّبناها فكسرت E3/E8 — مصدر الطقم بلا
+# وسوم، ووسمه `bt709` بيغيّر تفسير YUV->RGB عند الفكّ فرقعة الهوية
+# ما عادت تنقرا (١٩ إطار من ٢٥٠). الوسم على محتوى ما لمسناه ادّعاء
+# غير متحقَّق — نفس الخطيئة بالاتجاه المعاكس.
+#
+# الضمانة الحقيقية شغلتان: السلسلة بتوسم لأنها **حوّلت**، و
+# `assert_output_not_mislabelled` بتفحص النتيجة.
+
+# وسوم ممنوعة على مخرَج ٨ بتّات — Rec. 2100 بتعرّف HLG/PQ عند ١٠/١٢ بت.
+FORBIDDEN_TAGS = ("bt2020", "arib-std-b67", "smpte2084")
+
+
+def assert_output_not_mislabelled(path):
+    """
+    **حارس الوسم الكاذب.** المخرَج ٨ بتّات ممنوع يدّعي HDR.
+
+    بينحقّق **بعد** الترميز على الملف نفسه — مش على الأمر. الفرق مهم:
+    الأمر ممكن يكون صح والوسم يجي من مكان تاني (نسخ من المصدر، إعداد
+    مُغلِّف، سلوك نسخة ffmpeg جاية). الفحص على النتيجة بيمسك كل هدول.
+
+    كلفته نداء `ffmpeg -i` واحد (~٥ms) مقابل دقايق ترميز.
+    """
+    colors = C.probe(path)[4]
+    bad = [t for t in FORBIDDEN_TAGS
+           if t in " ".join(str(colors.get(k)) for k in
+                            ("primaries", "matrix", "trc"))]
+    if bad and (colors.get("bits") or 8) <= 8:
+        raise RuntimeError(
+            f"المخرَج موسوم {'/'.join(bad)} وهو {colors['bits']} بتّات — "
+            f"وسم كاذب.\n"
+            f"    {path}\n"
+            f"    الملف بيدّعي HDR وجوّاه بايتات ما انتحوّلت، فكل مشغّل "
+            f"بيقرّر شكلًا غير.\n"
+            f"    شوف SOURCE-SPEC.md §٣.٣.")
+    return colors
 
 
 def materialise_captions(cap_frames, total_frames, outdir):
@@ -290,7 +339,9 @@ def build_output(src, segs, caps, cfg, out_path, workdir,
     plan = frame_plan(segs, fps)
     starts = G.start_frames(segs, fps)
     total = sum(plan)
-    sw, sh, has_audio = src_info or probe_source(src)
+    info = src_info or probe_source_full(src)
+    sw, sh, has_audio = info[:3]
+    colors = info[4] if len(info) > 4 else None
 
     name = os.path.basename(workdir) or "out"
     inputs = ["-i", str(src)]
@@ -322,7 +373,7 @@ def build_output(src, segs, caps, cfg, out_path, workdir,
                                 caption_inputs=caption_inputs,
                                 with_audio=has_audio,
                                 cues=cues, sfx_inputs=sfx_inputs,
-                                speech_gain=speech_gain)
+                                speech_gain=speech_gain, colors=colors)
     gpath = os.path.join(workdir, "graph.txt")
     with open(gpath, "w", encoding="utf-8") as f:
         f.write(graph)
@@ -362,5 +413,17 @@ def build_output(src, segs, caps, cfg, out_path, workdir,
                 pass
         raise
     if not dry_run:
+        # الفحص على `.part` **قبل** النقل: مخرَج بوسم كاذب ما بيوصل
+        # اسمه النهائي أبدًا. نفس منطق الكتابة الذرّية — ملف بشكل
+        # مخرَج وهو مكسور أخطر من الفشل، لأنه بينكتشف بعد الرفع.
+        try:
+            assert_output_not_mislabelled(part)
+        except BaseException:
+            if os.path.exists(part):
+                try:
+                    os.remove(part)
+                except OSError:
+                    pass
+            raise
         os.replace(part, str(out_path))
     return out_path

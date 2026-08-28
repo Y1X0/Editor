@@ -92,7 +92,11 @@ def main():
         dur = C.probe_duration(a.input)
         # أبعاد المصدر (لمرساة القصّ) ووجود الصوت — بينقروا **مرة وحدة**،
         # مستقلين عن المقاس زي `probe_duration` بالضبط.
-        src_info = None if a.preview_frames else R.probe_source(a.input)
+        # `probe_source_full` مش `probe_source`: التلاثية بتقطع وسوم
+        # الألوان، وبلاها `build_graph` بتبني بلا tonemap **بصمت** —
+        # المخرَج بيطلع موسومًا bt709 وبكسلاته HLG ما انتحوّلت. نفس
+        # صنف خلل `motion.pan_px`: قيمة بتنقرا وما بتوصل.
+        src_info = None if a.preview_frames else R.probe_source_full(a.input)
         print(f"[1/4] المدة الأصلية: {dur:.1f}s")
 
         # Whisper لازم للقص أو للكابشن. بدون الاتنين ما إله لزوم، وقبل

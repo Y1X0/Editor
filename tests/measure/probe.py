@@ -50,3 +50,18 @@ def extract_frames(path, outdir):
                 os.path.join(str(outdir), "%06d.png")])
     return [os.path.join(str(outdir), f)
             for f in sorted(os.listdir(str(outdir))) if f.endswith(".png")]
+
+
+# وسوم ألوان SDR — بديل `render.probe_source_full` بالفحوص اللي
+# موضوعها مش الألوان (هندسة، صوت، كابشن).
+#
+# **مش قاموسًا فاضيًا ولا `None`:** الاتنين بيعطّلوا سلسلة الـtonemap
+# كمان، بس بمعنى «ما بنعرف» بدل «مصدر SDR». والفحص اللي بده يتأكد إن
+# SDR ما بينتأثر لازم يمرّر مصدرًا معلوم الوسوم.
+SDR_COLORS = {"pix_fmt": "yuv420p", "range": "tv", "primaries": "bt709",
+              "matrix": "bt709", "trc": "bt709", "hdr": False, "bits": 8}
+
+
+def sdr_probe(w, h, has_audio=True, duration=20.0):
+    """`probe_source_full` وهمية لمصدر SDR معروف."""
+    return lambda _p: (w, h, has_audio, duration, dict(SDR_COLORS))

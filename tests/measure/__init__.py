@@ -16,7 +16,8 @@
 """
 from .clicks import click_times
 from .identity import frame_id, read_identities
-from .probe import (count_frames, extract_frames, ffmpeg_available, run_ffmpeg)
+from .probe import (SDR_COLORS, count_frames, extract_frames,
+                    ffmpeg_available, run_ffmpeg, sdr_probe)
 from .source import (CLICK_EVERY, GRID_PITCH, ID_CAPACITY, PATCH, SR,
                      build_source, id_color)
 from .zoom import expected_scale, measure_scale
@@ -24,6 +25,7 @@ from .zoom import expected_scale, measure_scale
 __all__ = [
     "click_times", "frame_id", "read_identities", "count_frames",
     "extract_frames", "ffmpeg_available", "run_ffmpeg", "build_source",
+    "sdr_probe", "SDR_COLORS",
     "id_color", "CLICK_EVERY", "GRID_PITCH", "ID_CAPACITY", "PATCH", "SR",
     "expected_scale", "measure_scale",
 ]

@@ -12,6 +12,8 @@ import shlex
 
 import pytest
 
+from measure import sdr_probe
+
 from autoreel import render as R
 from conftest import ROOT
 
@@ -59,7 +61,8 @@ def _no_probe(monkeypatch):
     `build_video` بتقرا أبعاد المصدر (لازمة لحساب مرساة القصّ). هون
     مصدر وهمي، فبنثبّت الأبعاد ونضل بلا ffmpeg — نفس فلسفة `--dry-run`.
     """
-    monkeypatch.setattr(R, "probe_source", lambda p: (640, 1138, True))
+    monkeypatch.setattr(R, "probe_source_full",
+                        sdr_probe(640, 1138, True))
 
 
 # --------------------------------------------------------------- الأساسيات
@@ -263,7 +266,8 @@ def test_a_silent_source_produces_no_audio_chain(tmp_path, full_cfg, capsys,
     """
     `[0:a]` بتفشّل التشغيلة على مصدر بلا صوت، فلازم ينشال المسار كله.
     """
-    monkeypatch.setattr(R, "probe_source", lambda p: (640, 1138, False))
+    monkeypatch.setattr(R, "probe_source_full",
+                        sdr_probe(640, 1138, False))
     R.build_output("in.mp4", [(0.0, 1.0)], None, full_cfg,
                    str(tmp_path / "o.mp4"), str(tmp_path), dry_run=True)
     assert "[0:a]" not in graph_of(tmp_path)

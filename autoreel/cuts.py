@@ -42,9 +42,47 @@ def check_ffmpeg(warn=None):
     return v
 
 
+# الدوال الانتقالية اللي معناها HDR. `arib-std-b67` هي HLG — وهاي
+# **الحالة الافتراضية للآيفون**، مش حالة نادرة.
+HDR_TRC = ("arib-std-b67", "smpte2084")
+
+
+def _colors(banner):
+    """
+    وسوم الألوان من سطر التيار بـ`ffmpeg -i`. ولا نداء إضافي.
+
+    الشكل: `yuv420p10le(tv, bt2020nc/bt2020/arib-std-b67, progressive)`
+    وبمصدر SDR بسيط بيصير `yuv420p` بلا قوسين إطلاقًا — فكل الحقول
+    بترجع `None` وهاد المقصود: «ما بنعرف» غير «bt709».
+    """
+    m = re.search(r": Video:.*?, (\w+)(?:\(([^)]*)\))?", banner)
+    if not m:
+        return {"pix_fmt": None, "range": None, "primaries": None,
+                "matrix": None, "trc": None, "hdr": False, "bits": None}
+    pix = m.group(1)
+    bits = 10 if "10" in pix else (12 if "12" in pix else 8)
+    fields = [f.strip() for f in (m.group(2) or "").split(",")]
+    rng = fields[0] if fields and fields[0] in ("tv", "pc") else None
+    # `bt2020nc/bt2020/arib-std-b67` = مصفوفة/أوّليات/دالة انتقالية.
+    # وبتطلع كمان بشكل حقل واحد (`bt709`) لما التلاتة متطابقة.
+    trio = next((f for f in fields if "/" in f), None)
+    one = next((f for f in fields
+                if f and f not in ("tv", "pc", "progressive") and "/" not in f), None)
+    if trio:
+        parts = trio.split("/")
+        matrix, prim, trc = (parts + [None, None, None])[:3]
+    else:
+        matrix = prim = trc = one
+    return {"pix_fmt": pix, "range": rng, "primaries": prim, "matrix": matrix,
+            "trc": trc, "hdr": trc in HDR_TRC, "bits": bits}
+
+
 def probe(path):
     """
-    `(عرض, ارتفاع, فيه_صوت, مدة)` بنداء `ffmpeg -i` **واحد**.
+    `(عرض, ارتفاع, فيه_صوت, مدة, ألوان)` بنداء `ffmpeg -i` **واحد**.
+
+    `ألوان` انضافت **بالآخر** عمدًا: `probe_source` بتاخد `[:3]` و
+    `probe_duration` بتاخد `[3]`، فالتوسيع ما بيكسر ولا مستدعي.
 
     **ولا اعتماد على `ffprobe`.** كان `probe_duration` بتناديه بينما
     `probe_source` بتتجنّبه صراحة — فالتجنّب كان نصّ تجنّب، وأول سطر
@@ -81,6 +119,7 @@ def probe(path):
     if not m:
         raise RuntimeError(f"ما قدرت أقرا أبعاد الفيديو من {path}")
     has_audio = re.search(r"Stream #\d+:\d+.*?: Audio:", r.stderr) is not None
+    colors = _colors(r.stderr)
 
     d = re.search(r"Duration: (\d+):(\d\d):(\d\d(?:\.\d+)?)", r.stderr)
     if not d:
@@ -88,7 +127,7 @@ def probe(path):
         # منخترعه هون بينتشر لخطة القص كلها. الفشل أوضح.
         raise RuntimeError(f"ما قدرت أقرا مدة {path} — `ffmpeg -i` ما أعطى مدة")
     dur = int(d.group(1)) * 3600 + int(d.group(2)) * 60 + float(d.group(3))
-    return int(m.group(1)), int(m.group(2)), has_audio, dur
+    return int(m.group(1)), int(m.group(2)), has_audio, dur, colors
 
 
 def probe_duration(path):
