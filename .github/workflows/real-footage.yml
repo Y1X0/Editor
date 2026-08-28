@@ -7,13 +7,17 @@ name: real-footage
 # عيّنة، هو **صنف مدخلات جديد**. هالتدفّق بيخلّيه قابلًا للإعادة كل مرة
 # ينتصلّح شي.
 #
-# المدخل: أصل مرفوع على release. الافتراضي تاق `test-input`.
+# المدخل: رابط Google Drive عام (`drive`)، أو أصل مرفوع على release
+# (تاق `test-input`). درايف بيسبق.
 
 on:
   workflow_dispatch:
     inputs:
+      drive:
+        description: "رابط Google Drive أو معرّف الملف (بيسبق الrelease)"
+        default: ""
       tag:
-        description: "تاق الrelease اللي فيه الملف"
+        description: "تاق الrelease — بينستعمل بس لما `drive` تكون فاضية"
         default: "test-input"
       asset:
         description: "اسم الأصل (فاضي = أول أصل بالrelease)"
@@ -81,29 +85,39 @@ jobs:
 
       # ---------------------------------------------------------------
       # البند ١: تنزيل الملف
+      #
+      # مصدران: درايف (لو الملف مشارَك «anyone with the link») أو أصل
+      # release. درايف بيسبق — لأنه بيلغي خطوة الرفع اليدوي اللي
+      # بتتكرّر كل مرة.
       # ---------------------------------------------------------------
-      - name: تنزيل اللقطة من الrelease
+      - name: تنزيل اللقطة
         env:
           GH_TOKEN: ${{ github.token }}
+          DRIVE: ${{ inputs.drive }}
           TAG: ${{ inputs.tag }}
           ASSET: ${{ inputs.asset }}
         run: |
           set -euo pipefail
           mkdir -p footage
-          if [ -n "$ASSET" ]; then
-            gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
-              --pattern "$ASSET" --dir footage --clobber
+          if [ -n "$DRIVE" ]; then
+            # السكربت بيطبع المسار لحاله على stdout — بلا تخمين اسم.
+            python tools/fetch_drive.py "$DRIVE" -o footage > /tmp/src_path
           else
-            gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
-              --dir footage --clobber
+            if [ -n "$ASSET" ]; then
+              gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+                --pattern "$ASSET" --dir footage --clobber
+            else
+              gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+                --dir footage --clobber
+            fi
+            # أول ملف فيديو — الأسماء فيها فراغات، فلا تفكّها بالكلمات.
+            find footage -maxdepth 1 -type f \
+              \( -iname '*.mov' -o -iname '*.mp4' -o -iname '*.m4v' \) \
+              -print0 | head -z -n1 | tr -d '\0' > /tmp/src_path
           fi
           ls -lh footage
-          # أول ملف فيديو — الأسماء فيها فراغات، فلا تفكّها بالكلمات.
-          find footage -maxdepth 1 -type f \
-            \( -iname '*.mov' -o -iname '*.mp4' -o -iname '*.m4v' \) \
-            -print0 | head -z -n1 | tr -d '\0' > /tmp/src_path
           SRC="$(cat /tmp/src_path)"
-          [ -n "$SRC" ] || { echo "::error::ولا ملف فيديو بالrelease '$TAG'"; exit 1; }
+          [ -n "$SRC" ] || { echo "::error::ولا ملف فيديو من المصدر '$TAG'"; exit 1; }
           echo "SRC=$SRC" >> "$GITHUB_ENV"
           echo "اللقطة: $SRC"
 
