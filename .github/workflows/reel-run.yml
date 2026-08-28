@@ -1,0 +1,131 @@
+name: reel-run
+
+# تشغيل لمرة واحدة على فيديو مرفوع بالفرع نفسه.
+#
+# مُشغَّل بـ`push` مش `workflow_dispatch` عمدًا: workflow متشغّل بالدفع
+# بيشتغل من نسخة الفرع المدفوع، فما بيحتاج يكون على الفرع الافتراضي.
+#
+# المخرَج بينحط على فرع يتيم `reel-out` — مضيف الartifacts محجوب عن
+# جلسة التطوير (نفس سبب `calib-frames`)، بينما raw.githubusercontent
+# بيوصل. الartifact بينرفع كمان للتحميل من الواجهة.
+#
+# الفرعان مؤقّتان وبينحذفوا بعد التشغيلة.
+
+on:
+  push:
+    branches: [run-reel-tmp]
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: تنصيب ffmpeg ثابت
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/ff.tar.xz \
+            https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
+          mkdir -p /tmp/ff && tar -xJf /tmp/ff.tar.xz -C /tmp/ff --strip-components=1
+          sudo install -m755 /tmp/ff/ffmpeg /usr/local/bin/ffmpeg
+          ffmpeg -version | head -1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: تنصيب المشروع
+        run: |
+          set -euo pipefail
+          pip install -r requirements.txt
+          python -c "
+          from PIL import features
+          assert features.check('raqm'), 'Pillow بلا libraqm — الكابشن العربي بينكسر'
+          print('raqm: ok')"
+
+      - name: إطارات المعاينة — التلات مقاسات
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          python -m autoreel.cli footage/input.mp4 --sizes all \
+            --preview-frames -o out/prev.mp4 2>&1 | tee out/preview.log
+
+      # الترميز الكامل مع الكابشن. Whisper بيشتغل هون — شبكة المشغّل
+      # مفتوحة، بعكس جلسة التطوير اللي `huggingface.co` مرفوض فيها.
+      - name: الترميز الكامل مع الكابشن
+        run: |
+          set -euo pipefail
+          python -m autoreel.cli footage/input.mp4 --sizes reel \
+            -o out/reel.mp4 2>&1 | tr '\r' '\n' | tee out/render.log | tail -20
+          test -s out/reel.mp4
+
+      - name: إحصاء القص
+        run: |
+          set -euo pipefail
+          {
+            echo "### القص والتفريغ"
+            echo '```'
+            grep -E '^\[[0-9]/4\]|انشال|مقطع|كلمة|⚠️' out/render.log || true
+            echo '```'
+            echo ""
+            echo "### ffmpeg"
+            echo '```'
+            ffmpeg -version | head -1
+            echo '```'
+          } | tee out/stats.md >> "$GITHUB_STEP_SUMMARY"
+
+      # إطارات فيها الكابشن ظاهر: عيّنات موزّعة على طول المخرَج.
+      # الكابشن بيغطي ~٨١٪ من الزمن، فعيّنة كل بضع ثوانٍ بتلقطه.
+      - name: إطارات الكابشن
+        run: |
+          set -euo pipefail
+          dur=$(python -c "
+          import sys; sys.path.insert(0,'.')
+          from autoreel import cuts
+          print(f'{cuts.probe(\"out/reel.mp4\")[3]:.2f}')")
+          echo "مدة المخرَج: ${dur}s"
+          for i in 1 2 3 4 5 6 7 8; do
+            t=$(python -c "print(f'{$dur * $i / 9:.2f}')")
+            ffmpeg -v error -y -ss "$t" -i out/reel.mp4 -frames:v 1 \
+              "out/cap_$(printf '%02d' "$i")_t${t}s.png"
+          done
+          ls -lh out/*.png
+
+      # نسخة مضغوطة: حدّ الرفع بالمحادثة ٣٠MB.
+      - name: نسخة مضغوطة للعرض
+        run: |
+          set -euo pipefail
+          ffmpeg -v error -y -i out/reel.mp4 -c:v libx264 -preset medium -crf 28 \
+            -pix_fmt yuv420p -c:a aac -b:a 96k -movflags +faststart out/reel.small.mp4
+          ls -lh out/reel.mp4 out/reel.small.mp4
+
+      - name: ادفع المخرجات لفرع reel-out
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          cp out/*.png out/*.md out/*.log "$tmp/" 2>/dev/null || true
+          cp out/reel.small.mp4 "$tmp/" 2>/dev/null || true
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout --orphan reel-out
+          git rm -rq --cached . || true
+          find . -maxdepth 1 ! -name . ! -name .git -exec rm -rf {} +
+          cp "$tmp"/* . 2>/dev/null || true
+          printf '# مخرَج reel-run\n\nالتشغيلة: %s\n\nفرع مؤقّت.\n' "$GITHUB_RUN_ID" > README.md
+          git add -A
+          git commit -qm "مخرَج reel-run (تشغيلة $GITHUB_RUN_ID)"
+          git push -f origin reel-out
+          echo "المخرجات على فرع reel-out" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: reel-out
+          path: out/**
+          retention-days: 7
+          if-no-files-found: warn
