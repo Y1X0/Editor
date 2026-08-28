@@ -215,6 +215,56 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # ---------------------------------------------------------------
+      # الألوان على اللقطة **الحقيقية**.
+      #
+      # أرقام `test_color.py` مقاسة على مصدر مولَّد بوسوم HLG. لقطتك
+      # HLG حقيقية بعشر بتّات — فالقياس بينعاد عليها.
+      # ---------------------------------------------------------------
+      - name: تشبّع المخرَج ووسمه
+        if: ${{ inputs.full_export }}
+        run: |
+          set -euo pipefail
+          python - <<'PY' | tee out/color.txt
+          import glob, os, subprocess, sys, colorsys
+          sys.path.insert(0, ".")
+          from PIL import Image
+          from autoreel import cuts as C
+          rows = []
+          for mp4 in sorted(glob.glob("out/reel.*.mp4")):
+              png = mp4[:-4] + ".frame.png"
+              subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", mp4,
+                              "-frames:v", "1", png], check=True)
+              im = Image.open(png).convert("RGB")
+              d = list(im.getdata()); n = len(d)
+              sat = sum(colorsys.rgb_to_hsv(*[c / 255 for c in p])[1] for p in d) / n
+              t = C.probe(mp4)[4]
+              tag = f"{t['matrix']}/{t['primaries']}/{t['trc']}"
+              rows.append((os.path.basename(mp4), t["bits"], tag, sat))
+          src = C.probe(os.environ["SRC"])[4]
+          print(f"المصدر: {src['pix_fmt']} · "
+                f"{src['matrix']}/{src['primaries']}/{src['trc']} · hdr={src['hdr']}\n")
+          print(f"{'مخرَج':<22} {'بت':<4} {'الوسم':<26} SAT")
+          bad = []
+          for name, bits, tag, sat in rows:
+              print(f"{name:<22} {bits:<4} {tag:<26} {sat:.3f}")
+              if bits <= 8 and any(b in tag for b in
+                                   ("bt2020", "arib-std-b67", "smpte2084")):
+                  bad.append(name)
+          print()
+          if bad:
+              print(f"::error::وسم كاذب على {', '.join(bad)}")
+              raise SystemExit(1)
+          print("✅ ولا مخرَج ٨ بتّات بيدّعي HDR")
+          PY
+          {
+            echo ""
+            echo "### الألوان على اللقطة الحقيقية"
+            echo '```'
+            cat out/color.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       # الملفات هي الحكم — الأرقام ما بتقول إذا التأطير حلو.
       - uses: actions/upload-artifact@v4
         if: always()
