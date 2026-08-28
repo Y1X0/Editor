@@ -1,0 +1,118 @@
+name: calibrate
+
+# شبكات معايرة على لقطة حقيقية.
+#
+# **ليش بتدفع الصور لفرع بدل artifact:** مضيف الartifacts محجوب عن
+# جلسة التطوير (403)، فالصور ما بتوصل. الدفع لفرع `calib-frames`
+# بيخلّيها تنجلب بـ`git fetch` العادي.
+#
+# الفرع **مؤقّت وبينداس كل تشغيلة** — مش تاريخًا، بس مخرَج آخر معايرة.
+
+on:
+  workflow_dispatch:
+    inputs:
+      drive:
+        description: "رابط Google Drive أو معرّف الملف"
+        required: true
+      at:
+        description: "ثانية الإطار (فاضي = منتصف اللقطة)"
+        default: ""
+      only:
+        description: "npl | crop_bias | caption_size | max_words | min_gap (فاضي = الكل)"
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: تنصيب ffmpeg ثابت
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/ff.tar.xz \
+            https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
+          mkdir -p /tmp/ff && tar -xJf /tmp/ff.tar.xz -C /tmp/ff --strip-components=1
+          sudo install -m755 /tmp/ff/ffmpeg /usr/local/bin/ffmpeg
+          ffmpeg -version | head -1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: تنصيب المشروع
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libraqm0 fonts-dejavu-core
+          pip install -r requirements.txt
+          python -c "
+          from PIL import features
+          assert features.check('raqm'), 'Pillow بلا libraqm'"
+
+      - name: تنزيل اللقطة
+        env:
+          DRIVE: ${{ inputs.drive }}
+        run: |
+          set -euo pipefail
+          python tools/fetch_drive.py "$DRIVE" -o footage > /tmp/src_path
+          SRC="$(cat /tmp/src_path)"
+          echo "SRC=$SRC" >> "$GITHUB_ENV"
+          ls -lh footage
+
+      - name: شبكات المعايرة
+        env:
+          AT: ${{ inputs.at }}
+          ONLY: ${{ inputs.only }}
+        run: |
+          set -euo pipefail
+          mkdir -p calib
+          ARGS=(python tools/calibrate.py "$SRC" -o calib)
+          if [ -n "$AT" ]; then ARGS+=(--at "$AT"); fi
+          if [ -n "$ONLY" ]; then ARGS+=(--only "$ONLY"); fi
+          "${ARGS[@]}" 2>&1 | tee calib/report.txt
+          # الملفات اللي بتبدأ بـ`_` وسيطة — الشبكات هي المخرَج.
+          rm -f calib/_*.png
+          ls -lh calib
+          {
+            echo "### المعايرة"
+            echo '```'
+            cat calib/report.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ---------------------------------------------------------------
+      # الدفع لفرع مخصَّص. `--force` عمدًا: الفرع مخرَج آخر تشغيلة مش
+      # تاريخ، وتراكم صور PNG بتاريخ المستودع بلا فايدة.
+      # ---------------------------------------------------------------
+      - name: ادفع الشبكات لفرع calib-frames
+        run: |
+          set -euo pipefail
+          SRCNAME="$(basename "$SRC")"
+          tmp="$(mktemp -d)"
+          cp calib/*.png calib/*.txt "$tmp/" 2>/dev/null || true
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout --orphan calib-frames
+          git rm -rq --cached . || true
+          find . -maxdepth 1 ! -name . ! -name .git -exec rm -rf {} +
+          mkdir -p calib && cp "$tmp"/* calib/ 2>/dev/null || true
+          printf '# شبكات معايرة\n\nالمصدر: `%s`\nالتشغيلة: %s\n\nفرع مؤقّت، بينداس كل تشغيلة.\n' \
+            "$SRCNAME" "$GITHUB_RUN_ID" > README.md
+          git add -A
+          git commit -qm "معايرة على $SRCNAME (تشغيلة $GITHUB_RUN_ID)"
+          git push -f origin calib-frames
+          echo "الشبكات على فرع calib-frames" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: calib
+          path: calib/**
+          retention-days: 14
+          if-no-files-found: warn
