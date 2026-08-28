@@ -1,0 +1,25 @@
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+[0;93m2026-08-28 03:21:30.927803896 [W:onnxruntime:Default, device_discovery.cc:146 GetPciBusId] Skipping pci_bus_id for PCI path at "/sys/devices/LNXSYSTM:00/LNXSYBUS:00/ACPI0004:00/MSFT1000:00/5620e0c7-8062-4dce-aeb7-520c7ef76171" because filename "5620e0c7-8062-4dce-aeb7-520c7ef76171" did not match expected pattern of [0-9a-f]+:[0-9a-f]+:[0-9a-f]+[.][0-9a-f]+[m
+المصدر 1080×1920 · hdr=True · 3 كلمة · الإطار عند 12.46s
+
+[npl] calib/1-npl.png
+    أقل npl = أفتح. ١٠٠٠ هي القيمة الاسمية لـHLG مش معايَرة.
+
+[crop_bias] calib/2-crop_bias.png
+    على square (أحدّ قصّ). أصغر = لفوق. شوف أعلى الرأس مش المركز.
+
+[caption_size] calib/3-caption_size.png
+    على reel بنصّك. اقرأه من مسافة ذراع — هيك بينتشاف على الموبايل.
+
+[max_words] calib/4-max_words.png
+    أكتر كلمات = كابشنات أقل بس أصغر خطًا (`_fit` بتصغّر لتسع).
+
+[min_gap] إيقاع — رقم مش صورة:
+min_gap | مقاطع | متوسط الطول | انشال
+--------|-------|-------------|-------
+0.25    | 1     |        0.82s | 24.09s
+0.35    | 1     |        0.82s | 24.09s
+0.45    | 1     |        0.82s | 24.09s
+0.6     | 1     |        0.82s | 24.09s
+0.8     | 1     |        0.82s | 24.09s
+
