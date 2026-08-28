@@ -97,6 +97,10 @@ def main():
         # المخرَج بيطلع موسومًا bt709 وبكسلاته HLG ما انتحوّلت. نفس
         # صنف خلل `motion.pan_px`: قيمة بتنقرا وما بتوصل.
         src_info = None if a.preview_frames else R.probe_source_full(a.input)
+        # افحص الفرضية **مرة وحدة** قبل أي ترميز — مش لكل مقاس. الأبعاد
+        # مستقلة عن المقاس، والفحص ٢١.٦ms.
+        if src_info:
+            C.verify_source(a.input, src_info[0], src_info[1])
         print(f"[1/4] المدة الأصلية: {dur:.1f}s")
 
         # Whisper لازم للقص أو للكابشن. بدون الاتنين ما إله لزوم، وقبل

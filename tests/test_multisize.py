@@ -31,6 +31,10 @@ def workdir(tmp_path, monkeypatch):
     # مدخَل لحساب المرساة مش الشي المفحوص هون.
     monkeypatch.setattr(R, "probe_source_full",
                         sdr_probe(640, 1138, True))
+    # ونفس السبب لفحص الفرضية: بده ملف حقيقي يشغّل عليه `showinfo`،
+    # والملفات هون وهمية. **الحارس غير المبدَّل بـ`test_rotation.py`**
+    # (S6) — بيشغّل `cli` كاملة على مصدر حقيقي بفرضية مكسورة.
+    monkeypatch.setattr(C, "verify_source", lambda *a, **k: None)
     monkeypatch.chdir(tmp_path)
     return tmp_path, str(p)
 

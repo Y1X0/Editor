@@ -90,15 +90,24 @@ def test_the_colour_tags_are_read_from_the_same_single_call(srcs):
     assert un["trc"] is None, "«ما بنعرف» لازم تكون None مش bt709"
 
 
-def test_no_ffprobe_and_no_second_call():
-    """حارس: قراءة الألوان ما بتضيف نداءً."""
+def test_reading_the_colour_tags_adds_no_call_to_probe():
+    """
+    حارس: قراءة الألوان ما بتضيف نداءً **جوّا `probe`**.
+
+    الفحص على `probe` نفسها مش على عدد النداءات بالملف — `cuts.py`
+    فيها نداءات تانية مقصودة (`ffmpeg_version`، `delivered`)، وعدّها
+    بيخلّي الفحص يفشل عند أي إضافة مشروعة بدل ما يحمي القاعدة.
+
+    **وهاد صار فعلًا:** الصيغة الأولى كانت `len(runs) == 2` وفشلت لما
+    `delivered` انضافت — رقم سحري بيقيس الملف مش القاعدة.
+    """
     import ast
     src = open(os.path.join(ROOT, "autoreel", "cuts.py"), encoding="utf-8").read()
-    tree = ast.parse(src)
-    runs = [n for n in ast.walk(tree)
+    fn = next(n for n in ast.walk(ast.parse(src))
+              if isinstance(n, ast.FunctionDef) and n.name == "probe")
+    runs = [n for n in ast.walk(fn)
             if isinstance(n, ast.Call) and getattr(n.func, "attr", "") == "run"]
-    # `probe` + `ffmpeg_version` وبس.
-    assert len(runs) == 2, f"عدد نداءات subprocess بـcuts.py صار {len(runs)}"
+    assert len(runs) == 1, f"`probe` صار فيها {len(runs)} نداء بدل واحد"
 
 
 # ------------------------------------------------- C2: التشبّع بينسترجع

@@ -77,9 +77,35 @@ def _colors(banner):
             "trc": trc, "hdr": trc in HDR_TRC, "bits": bits}
 
 
+def _rotation_swaps_wh(banner):
+    """
+    هل مصفوفة الدوران بتقلب العرض والارتفاع؟
+
+    الآيفون بيسجّل أفقيًا وبيحط مصفوفة دوران، وffmpeg **بيدوّر تلقائيًا
+    عند الفكّ**. فسطر `Stream` بيعطي الحجم المرمَّز (١٩٢٠×١٠٨٠) بينما
+    اللي بيوصل رسم الفلاتر معروضًا (١٠٨٠×١٩٢٠).
+
+    القياس على الأربع حالات (`-display_rotation` عند البناء):
+
+        90        -> `rotation of 90.00 degrees`     -> قلب
+        180       -> `rotation of -180.00 degrees`   -> بلا قلب
+        270 / -90 -> `rotation of -90.00 degrees`    -> قلب
+
+    **الإشارة مش معلومة مفيدة:** ffmpeg بيطبّع الزاوية لـ(-180, 180]،
+    فـ`270` و`-90` بيطلعوا نفس السطر بالضبط. القرار على `abs` وبس.
+    """
+    m = re.search(r"displaymatrix: rotation of (-?[\d.]+) degrees", banner)
+    return bool(m) and round(abs(float(m.group(1)))) % 180 == 90
+
+
 def probe(path):
     """
     `(عرض, ارتفاع, فيه_صوت, مدة, ألوان)` بنداء `ffmpeg -i` **واحد**.
+
+    **الأبعاد معروضة مش مرمَّزة** — شوف `_rotation_swaps_wh`.
+    `graph.size_chain` بتبني نافذة القص من أرقام بايثون (لأن `crop.iw`
+    ما بتتتبّع مقاسًا متغيّرًا)، فالرقم غير المطبَّع كان بيعطي نافذة من
+    مكان غلط **بلا ما تفشل**.
 
     `ألوان` انضافت **بالآخر** عمدًا: `probe_source` بتاخد `[:3]` و
     `probe_duration` بتاخد `[3]`، فالتوسيع ما بيكسر ولا مستدعي.
@@ -120,6 +146,9 @@ def probe(path):
         raise RuntimeError(f"ما قدرت أقرا أبعاد الفيديو من {path}")
     has_audio = re.search(r"Stream #\d+:\d+.*?: Audio:", r.stderr) is not None
     colors = _colors(r.stderr)
+    w, h = int(m.group(1)), int(m.group(2))
+    if _rotation_swaps_wh(r.stderr):
+        w, h = h, w
 
     d = re.search(r"Duration: (\d+):(\d\d):(\d\d(?:\.\d+)?)", r.stderr)
     if not d:
@@ -127,12 +156,64 @@ def probe(path):
         # منخترعه هون بينتشر لخطة القص كلها. الفشل أوضح.
         raise RuntimeError(f"ما قدرت أقرا مدة {path} — `ffmpeg -i` ما أعطى مدة")
     dur = int(d.group(1)) * 3600 + int(d.group(2)) * 60 + float(d.group(3))
-    return int(m.group(1)), int(m.group(2)), has_audio, dur, colors
+    return w, h, has_audio, dur, colors
 
 
 def probe_duration(path):
     """مدة المصدر بالثواني. شوف `probe` — التقريب لجزء المئة موثّق هناك."""
     return probe(path)[3]
+
+
+# `0:1` = SAR غير محدَّد، وffmpeg بيعامله ١:١. **ولقطات الآيفون بتعطيه**
+# — فحص بيقارن بـ`1:1` وبس كان رح يرمي على كل ملف منها.
+OK_SAR = ("1:1", "0:1")
+
+
+def delivered(path):
+    """
+    الأبعاد وSAR اللي ffmpeg **بيسلّمها فعلًا** لرسم الفلاتر.
+
+    `showinfo` على إطار واحد. الكلفة مقاسة: ٢١.٦ms مقابل ٥.٥ms لـ
+    `ffmpeg -i`، وكلاهما لا شي جنب دقايق الترميز.
+    """
+    r = subprocess.run(
+        ["ffmpeg", "-v", "info", "-i", str(path), "-vf", "showinfo",
+         "-frames:v", "1", "-f", "null", "-"], capture_output=True, text=True)
+    m = re.search(r"\bs:(\d+)x(\d+)", r.stderr)
+    if not m:
+        raise RuntimeError(f"ما قدرت أقرا أبعاد الإطار المسلَّم من {path}")
+    s = re.search(r"\bsar:(\d+)/(\d+)", r.stderr)
+    return (int(m.group(1)), int(m.group(2)),
+            f"{s.group(1)}:{s.group(2)}" if s else None)
+
+
+def verify_source(path, w, h, warn=None):
+    """
+    **افحص الفرضية مش الحالة.**
+
+    حارس على «الدوران متصلّح» بيحمي من حالة وحدة. هاد بيفحص الفرضية
+    نفسها: الأبعاد اللي `graph` رح تبني عليها تعابيرها لازم تطابق
+    اللي ffmpeg رح يسلّمه. فبيمسك الدوران، و`SAR` مش مربّعة، والقصّ
+    بالحاوية، وأي سلوك جديد بنسخة ffmpeg جاية — بلا ما نعرفهن سلفًا.
+
+    **بيرمي ما بيحذّر.** التحذير بيضيع بين أسطر تقدّم ffmpeg والمستخدم
+    بيشوف `✅ خلص` بالآخر؛ والتصليح التلقائي أسوأ لأنه بيخفي إن
+    فرضيتنا كانت غلط.
+    """
+    dw, dh, sar = delivered(path)
+    if (w, h) != (dw, dh):
+        raise RuntimeError(
+            f"فرضية مكسورة عن {path}:\n"
+            f"    الهندسة محسوبة على  {w}×{h}\n"
+            f"    وffmpeg بيسلّم       {dw}×{dh}\n"
+            f"    نافذة القص رح تطلع من مكان غلط بلا ما تفشل. "
+            f"شوف SOURCE-SPEC.md.")
+    if sar is not None and sar not in OK_SAR:
+        raise RuntimeError(
+            f"SAR = {sar} على {path} — بكسل غير مربّع.\n"
+            f"    `size_chain` بتشتغل على أبعاد التخزين وبتتجاهل SAR، "
+            f"فالصورة بتنضغط. مش مدعوم.")
+    return dw, dh, sar
 
 
 def segments_from_words(words, duration, min_gap=0.45, pad=0.10, min_seg=0.35):

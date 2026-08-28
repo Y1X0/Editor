@@ -69,7 +69,7 @@ def main():
     root = json.load(open(args.config, encoding="utf-8"))
     os.makedirs(args.outdir, exist_ok=True)
 
-    pw, ph, _, dur = C.probe(args.input)
+    pw, ph, _, dur, _colors = C.probe(args.input)
     dw, dh = delivered_size(args.input)
     at = args.at if args.at is not None else dur / 2
 
