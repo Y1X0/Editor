@@ -347,6 +347,42 @@ def zoom_values(cfg, nseg):
     return [cycle[i % len(cycle)] for i in range(nseg)]
 
 
+def zoom_plan(plan, fps, cfg):
+    """
+    يقسّم كل مقطع لنوافذ زوم ≤ `motion.zoom_every` ثانية.
+
+    **ليش موجودة:** الزوم كان قيمة لكل **مقطع**، والمقاطع بتيجي من فجوات
+    الكلام. متكلّم متواصل = مقاطع قليلة = تغيّرات بصرية قليلة. مقيس على
+    لقطة حقيقية: ٤ مقاطع بـ٧٦ ثانية = **٢.٥ تغيّر/دقيقة**، بينما وسيط
+    تسع ريلز مرجعية **٢٦.٧**. وتصغير `cuts.min_gap` ما بيسدّها — جرّبنا
+    من ٠.٤٥ لـ٠.١٢ فوقف عند ٣.٤: ما في صمت إضافي ليتشال أصلًا.
+
+    فالنافذة انفكّت عن المقطع. `piecewise` أصلًا بتبني `between(n,a,b)`
+    من أي خطة، فالتقسيم ما بيلمس القصّ ولا الصوت ولا الكابشن — بس
+    `size_chain`.
+
+    **حدود المقاطع بتضل نوافذ.** التقسيم جوّا كل مقطع، فكل قطة حقيقية
+    بيصير عندها تغيّر زوم زي قبل، وبينضاف عليها التغيّرات الزمنية.
+
+    التقسيم متساوٍ داخل المقطع (`divmod`) مش «نوافذ كاملة + بقية»:
+    البقية بتطلع شظية بتلمع لإطارين. و`sum(الناتج) == sum(plan)` بالضبط
+    — المجموع هو مصدر الحقيقة اللي الصورة والصوت والكابشن مبنيين عليه.
+
+    `zoom_every` صفر أو غايبة = السلوك القديم، قيمة لكل مقطع.
+    """
+    cm = cfg.get("motion", {})
+    every = cm.get("zoom_every", 0) if cm.get("enabled") else 0
+    if not every or every <= 0:
+        return list(plan)
+    chunk = max(1, int(round(every * fps)))
+    out = []
+    for n in plan:
+        k = max(1, -(-n // chunk))          # ceil بلا float
+        base, rem = divmod(n, k)
+        out += [base + (1 if i < rem else 0) for i in range(k)]
+    return out
+
+
 def _even(n):
     return int(n / 2) * 2
 
@@ -510,7 +546,7 @@ def build_graph(cfg, plan, starts, sizes, src_w, src_h,
     """
     fps = validate_fps(cfg["output"]["fps"], sr)
     assert_disjoint(starts, plan)
-    nseg, nout = len(plan), len(sizes)
+    nout = len(sizes)
 
     zlabels = [f"z{i}" for i in range(nout)]
     alabels = [f"ao{i}" for i in range(nout)] if with_audio else [None] * nout
@@ -532,7 +568,10 @@ def build_graph(cfg, plan, starts, sizes, src_w, src_h,
     maps = []
     for i, (name, scfg) in enumerate(sizes):
         zoomed = f"g{i}"
-        parts.append(size_chain(scfg, plan, zoom_values(scfg, nseg),
+        # نوافذ الزوم مش المقاطع — `zoom_plan` بتقسّمها زمنيًا. المجموع
+        # نفسه، فـ`piecewise` بتغطي كل إطار زي قبل.
+        zplan = zoom_plan(plan, fps, scfg)
+        parts.append(size_chain(scfg, zplan, zoom_values(scfg, len(zplan)),
                                 zlabels[i], zoomed, src_w, src_h))
         if caption_inputs and name in caption_inputs:
             k = caption_inputs[name]

@@ -179,12 +179,19 @@ def finale_frame(plan):
 
 
 def collect_events(plan, zooms=None, caption_frames=(), word_frames=(),
-                   cfg=None):
+                   cfg=None, zoom_plan=None):
     """
     كل الأحداث المرشَّحة، **قبل** التصفية. مرتّبة بـ`(إطار, أولوية)`.
 
     `caption_frames` و`word_frames` بتجي جاهزة من مسار الكابشن —
     هالوحدة ما بتحسبهن، عشان تضل نقية ومستقلة عن `captions.py`.
+
+    `zoom_plan` خطة **نوافذ الزوم**، وهي مش خطة المقاطع من لما انفكّ
+    الزوم عن القص (`graph.zoom_plan`). `cut` بتنحسب من `plan` و`zoom`
+    من `zoom_plan`؛ وبلاها كان مؤثّر الزوم بيدّعي تغيّرًا عند حدود
+    المقاطع بس بينما الزوم بيتغيّر أكتر من هيك بكتير.
+
+    غايبة = `plan` نفسها، وهاد سلوك ما قبل التقسيم بالضبط.
     """
     c = merged_config(cfg)
     ev = c["events"]
@@ -197,7 +204,7 @@ def collect_events(plan, zooms=None, caption_frames=(), word_frames=(),
 
     add([0], "start")
     add(cut_frames(plan), "cut")
-    add(zoom_change_frames(plan, zooms), "zoom")
+    add(zoom_change_frames(plan if zoom_plan is None else zoom_plan, zooms), "zoom")
     add(sorted(set(int(f) for f in caption_frames)), "caption")
     add(sorted(set(int(f) for f in word_frames)), "word")
     fin = finale_frame(plan)
@@ -292,7 +299,7 @@ def merged_config(cfg):
 
 
 def plan_cues(plan, fps, zooms=None, caption_frames=(), word_frames=(),
-              cfg=None, sr=DEFAULT_SR, durations=None):
+              cfg=None, sr=DEFAULT_SR, durations=None, zoom_plan=None):
     """
     الخطة كاملة: أحداث -> تصفية -> مؤثرات بفهارس عيّنات.
 
@@ -304,7 +311,8 @@ def plan_cues(plan, fps, zooms=None, caption_frames=(), word_frames=(),
         return []
     frame_to_sample(0, fps, sr)             # بتفشل بدري لو fps ما بتقسّم sr
 
-    events = collect_events(plan, zooms, caption_frames, word_frames, cfg)
+    events = collect_events(plan, zooms, caption_frames, word_frames, cfg,
+                            zoom_plan=zoom_plan)
     events = suppress(events, seconds_to_frames(c["min_gap"], fps))
 
     cues = []

@@ -68,11 +68,12 @@ def test_no_dead_keys_left_behind(raw):
         "output.width", "output.height", "output.fps", "output.crf",
         "cuts.min_gap", "cuts.pad", "cuts.min_seg",
         "motion.enabled", "motion.zoom_cycle", "motion.pan_px",
+        "motion.zoom_every",
         "geometry.fit", "geometry.crop_bias", "geometry.pad_blur",
         "geometry.tonemap", "geometry.tonemap_npl",
         "captions.enabled", "captions.font", "captions.size",
         "captions.max_words", "captions.color", "captions.highlight",
-        "captions.box", "captions.y_ratio",
+        "captions.box", "captions.y_ratio", "captions.karaoke",
         "sfx.enabled", "sfx.min_gap", "sfx.speech_gain", "sfx.events",
         "exports",
     }
@@ -152,6 +153,38 @@ def test_motion_zoom_cycle_reaches_the_filter(cfg, tmp_path, capsys):
                    bumped(cfg, ["motion", "zoom_cycle"], [1.0, 1.5]),
                    str(tmp_path / "o.mp4"), str(tmp_path), dry_run=True)
     assert a != capsys.readouterr().out
+
+
+def test_captions_karaoke_changes_the_number_of_frames(cfg, tmp_path):
+    """
+    `karaoke: false` بتوقّف نسخة-لكل-كلمة. كنا نطفيه بتخلية `highlight`
+    نفس `color` — إخفاء مش إطفاء: الإطارات بتضل تتولّد، وأداة فحص
+    الـbidi بتعمى لأنها بتلاقي الكلمة بلونها.
+    """
+    words = [{"word": w, "start": i * 0.5, "end": i * 0.5 + 0.5}
+             for i, w in enumerate(["واحد", "اثنين", "ثلاثة"])]
+    groups = CAP.group_words(words, 3)
+    on = CAP.build_caption_pngs(groups, cfg["captions"], 1080,
+                                str(tmp_path / "on"), karaoke=True)
+    off = CAP.build_caption_pngs(groups, cfg["captions"], 1080,
+                                 str(tmp_path / "off"), karaoke=False)
+    assert len(on) > len(off), "captions.karaoke ما غيّر عدد الإطارات"
+    assert len(off) == 1
+
+
+def test_motion_zoom_every_subdivides_the_zoom_windows(cfg):
+    """
+    `zoom_every` بتفكّ نافذة الزوم عن المقطع. مقطع واحد طويل لازم يتقسّم
+    لنوافذ، والرسم يتغيّر — بلاها كان الزوم قيمة وحدة للمقطع كله.
+    """
+    plan = [300]                              # ١٠ ثواني عند 30fps
+    off  = G.zoom_plan(plan, 30, bumped(cfg, ["motion", "zoom_every"], 0))
+    on   = G.zoom_plan(plan, 30, bumped(cfg, ["motion", "zoom_every"], 2.0))
+    assert off == [300], "صفر لازم يرجّع السلوك القديم"
+    assert len(on) == 5 and sum(on) == 300, on
+    a = G.size_chain(cfg, off, G.zoom_values(cfg, len(off)), "in", "out", 1080, 1920)
+    b = G.size_chain(cfg, on,  G.zoom_values(cfg, len(on)),  "in", "out", 1080, 1920)
+    assert a != b, "motion.zoom_every ما وصل سلسلة الفلاتر"
 
 
 def test_motion_pan_px_reaches_the_filter(cfg):

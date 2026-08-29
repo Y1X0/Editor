@@ -20,7 +20,8 @@
       1.04,
       1.14
     ],
-    "pan_px": 26
+    "pan_px": 26,
+    "zoom_every": 2.5
   },
   "geometry": {
     "fit": "crop",
@@ -41,9 +42,10 @@
     ],
     "highlight": [
       255,
-      255,
-      255
+      92,
+      58
     ],
+    "karaoke": false,
     "box": [
       114,
       18,
