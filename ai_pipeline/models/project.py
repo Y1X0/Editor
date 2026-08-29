@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from pydantic import Field, model_validator
 
+from shared.frames import validate_fps
+
 from .base import SHA256, SLUG, StrictModel
 
 
@@ -25,11 +27,9 @@ class Output(StrictModel):
         `sample = frame × (sr // fps)` ضرب صحيح. لو القسمة مش صحيحة
         (29.97 مثلًا: 1601.6) بيصير الانزياح تراكميًا وصامتًا.
         """
-        if self.sample_rate % self.fps:
-            raise ValueError(
-                f"sample_rate/fps لازم يكون صحيحًا: "
-                f"{self.sample_rate}/{self.fps} = {self.sample_rate / self.fps}"
-            )
+        # تعريف واحد للثابت. `shared.frames.validate_fps` هي نفسها
+        # اللي `autoreel` بتعتمد عليها، فالنظامان ما بيفترقوا بصمت.
+        validate_fps(self.fps, self.sample_rate)
         if self.width % 2 or self.height % 2:
             raise ValueError("العرض والارتفاع لازم يكونوا أزواجًا (yuv420p)")
         return self

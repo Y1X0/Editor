@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "auto-reel"
 version = "0.1.0"
-description = "محرر ريلز أوتوماتيكي عربي: قص الصمت + زوم + كابشن كاريوكي محروق"
+description = "مستودع فيديو عربي: محرر ريلز أوتوماتيكي (autoreel) + مسار توليد بالذكاء الاصطناعي (ai_pipeline)"
 readme = "README.md"
 # النحو بينحلّ تحت 3.8، بس الطقم **مشغَّل على 3.11 بس**. الأرضية هون
 # ادعاء محافظ مش نتيجة قياس — نفس درس نسخة ffmpeg، فمذكور صراحة.
@@ -27,6 +27,10 @@ classifiers = [
 dependencies = [
     "Pillow>=10.0.0",
     "faster-whisper>=1.0.0",
+    # عقود `ai_pipeline`. بالتبعيات الأساسية مش بextra لأن الطقم واحد:
+    # `requirements-dev.txt` بيغطّي الـdev extra بس، فمساهم بينصّب منه
+    # ما بيوصله pydantic وتفشل ٨٠ فحصًا لسبب مش واضح.
+    "pydantic>=2.9",
 ]
 
 [project.optional-dependencies]
@@ -57,7 +61,7 @@ Homepage = "https://github.com/y1x0/editor"
 # ---------------------------------------------------------------------------
 
 [tool.setuptools]
-packages = ["autoreel"]
+packages = ["autoreel", "ai_pipeline", "shared"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -66,3 +70,8 @@ markers = [
     "slow: ترميز ffmpeg حقيقي — دقايق مش ثواني، عطّلها بـ -m \"not slow\"",
     "sfx: قبول المؤثرات الصوتية على ناتج ffmpeg، عطّلها بـ -m \"not sfx\"",
 ]
+
+# ملاحظة مثبَّتة على مستوى المستودع: `arabic-reshaper` و`python-bidi`
+# **ممنوعتان**. مقيس: `delete_harakat=True` افتراضيًا بيحذف كل التشكيل
+# (٢٠ حركة -> ٠) والرسم بيطلع مقلوبًا وحروفه مفكوكة.
+# شوف `CLAUDE.md` و`docs/ai-video-pipeline/SPIKE-FINDINGS.md` / F1.

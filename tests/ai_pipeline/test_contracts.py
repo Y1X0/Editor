@@ -96,7 +96,7 @@ def test_typography_has_no_shaping_engine_or_paths():
 def test_rejects_fps_with_fractional_samples(fps):
     if 48000 % fps == 0:
         pytest.skip("قسمة صحيحة")
-    with pytest.raises(ValidationError, match="صحيحًا"):
+    with pytest.raises(ValidationError, match="بينقسم|صحيحًا"):
         Output(fps=fps)
 
 

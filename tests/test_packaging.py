@@ -71,11 +71,17 @@ def test_every_marker_used_in_the_suite_is_declared(proj):
     """
     declared = {m.split(":")[0] for m in proj["tool"]["pytest"]["ini_options"]["markers"]}
     used = set()
-    d = os.path.join(ROOT, "tests")
-    for name in os.listdir(d):
-        if name.endswith(".py"):
-            used |= set(re.findall(r"pytest\.mark\.(\w+)",
-                                   open(os.path.join(d, name), encoding="utf-8").read()))
+    # `os.walk` مش `os.listdir`: الطقم صار فيه `tests/ai_pipeline/`، و
+    # المسح المسطّح كان بيخلّيها نقطة عمى — علامة غير معلَنة هناك
+    # بتمرق، وهاد بالضبط الخلل اللي هالفحص موجود ليمنعه.
+    for d, _, names in os.walk(os.path.join(ROOT, "tests")):
+        if "__pycache__" in d:
+            continue
+        for name in names:
+            if name.endswith(".py"):
+                used |= set(re.findall(r"pytest\.mark\.(\w+)",
+                                       open(os.path.join(d, name),
+                                            encoding="utf-8").read()))
     builtin = {"parametrize", "skipif", "skip", "xfail", "usefixtures", "filterwarnings"}
     assert (used - builtin) <= declared, f"علامات غير معلَنة: {(used - builtin) - declared}"
 
@@ -93,12 +99,18 @@ def test_the_project_carries_a_license(proj):
 
 def test_the_bundled_font_carries_its_own_license():
     """
-    MIT بجذر المستودع بتغطّي **الكود**. Tajawal تحت OFL 1.1 وشروطها
+    MIT بجذر المستودع بتغطّي **الكود**. Tajawal وAmiri تحت OFL 1.1 وشروطهن
     مختلفة، فتوزيعها بلا نصّ رختها مخالفة — والملفات موجودة بالمستودع.
     """
-    ofl = _read("fonts/OFL.txt")
-    assert "SIL OPEN FONT LICENSE" in ofl.upper()
-    assert os.path.exists(os.path.join(ROOT, "fonts", "Tajawal-ExtraBold.ttf"))
+    for lic, font in (("fonts/OFL.txt", "Tajawal-ExtraBold.ttf"),
+                      ("fonts/OFL-Amiri.txt", "AmiriQuran-Regular.ttf")):
+        assert "SIL OPEN FONT LICENSE" in _read(lic).upper(), lic
+        assert os.path.exists(os.path.join(ROOT, "fonts", font)), font
+
+    # رختان منفصلتان مش تكرارًا: نصّ OFL 1.1 واحد بس **حامل الحقوق
+    # مختلف** (Boutros International مقابل مشروع Amiri)، ودمجهن بملف
+    # واحد بيضيّع إسنادًا بيلزمه الترخيص نفسه.
+    assert _read("fonts/OFL.txt") != _read("fonts/OFL-Amiri.txt")
 
 
 # ------------------------------------------------------------- PKG-1
