@@ -524,10 +524,22 @@ def test_long_token_is_split_not_dropped(caps):
     assert joined == LONG_URL
 
 
+# حجم يجبر كسر التوكن الطويل. **مثبَّت مش موروث من `config.json`**:
+# التلات فحوص تحت بتفحص سلوك **الكسر**، وشرطها إن الرابط ما بيسع بسطر.
+# لما انصغّر `captions.size` للإنتاج (٧٤ -> ٤٥) صار بيسع، فالتلاتة
+# صاروا يفحصوا حالة ما انكتبوا لها. سلوك مربوط بقيمة إنتاج = فحص
+# بينهار بصمت أول معايرة.
+SPLIT_SIZE = 74
+
+
+def splitting(caps):
+    return dict(caps, size=SPLIT_SIZE)
+
+
 @needs_raqm
 def test_split_pieces_keep_one_logical_index(caps):
     """كل قطع التوكن الواحد بتحمل نفس الفهرس — التلوين بيلوّنه كامل."""
-    lay = CAP._layout(f"شوف {LONG_URL} هلأ", caps, 1080)
+    lay = CAP._layout(f"شوف {LONG_URL} هلأ", splitting(caps), 1080)
     idx = [li for ln in lay["lines"] for _, li in ln]
     assert set(idx) == {0, 1, 2}
     assert idx.count(1) > 1, "الرابط المفروض ينكسر لأكتر من قطعة"
@@ -536,7 +548,7 @@ def test_split_pieces_keep_one_logical_index(caps):
 @needs_raqm
 def test_split_prefers_logical_break_points(caps):
     """الكسر بعد `/` بيقرا أحسن من الكسر بنص كلمة."""
-    lay = CAP._layout(LONG_URL, caps, 1080)
+    lay = CAP._layout(LONG_URL, splitting(caps), 1080)
     pieces = [t for ln in lay["texts"] for t in ln]
     assert sum(1 for p in pieces[:-1] if p[-1] in CAP._BREAK_AFTER) >= 1
 
@@ -545,6 +557,7 @@ def test_split_prefers_logical_break_points(caps):
 def test_highlighting_a_split_token_colours_all_its_pieces(caps):
     """التوكن المكسور لازم يتلوّن كامل، مش قطعة منه."""
     text = f"شوف {LONG_URL} هلأ"
+    caps = splitting(caps)
     bare = dict(caps, box=[0, 0, 0, 0], color=[255, 255, 255])
     img = CAP.render_caption(text, bare, 1080, highlight_idx=1).convert("RGB")
     px = img.load()

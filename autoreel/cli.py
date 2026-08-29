@@ -29,6 +29,7 @@ def _one_export(name, cfg, src, segs, w2, out_path, work, a, src_info=None,
         CAP.assert_fits_frame(texts, cfg["captions"], W, H, label=name)
         caps = CAP.build_caption_pngs(groups, cfg["captions"], W,
                                       os.path.join(work, f"caps_{name}"),
+                                      karaoke=cfg["captions"].get("karaoke", True),
                                       bridge_gap=cfg["cuts"]["min_gap"])
         print(f"  {tag} {len(groups)} كابشن ({len(caps)} إطار)")
 
@@ -165,9 +166,13 @@ def main():
             # بتشغّل الفرع بس `plan_cues` بترجّع فاضي لأنها بتقرا
             # `enabled: false` من نفس الconfig — والتشغيلة بتنجح بلا
             # ولا مؤثر. صار معنا، وما انكشف إلا بقياس المخرَج.
+            # نوافذ الزوم مش المقاطع — لازم مؤثّر `zoom` يتبع النوافذ
+            # الحقيقية وإلا صار بيدّعي تغيّرًا مش صحيح.
+            zplan = G.zoom_plan(plan, fps, root)
             cues = SFX.plan_cues(
                 plan, fps,
-                zooms=G.zoom_values(root, len(plan)),
+                zoom_plan=zplan,
+                zooms=G.zoom_values(root, len(zplan)),
                 caption_frames=[round(g["start"] * fps) for g in groups],
                 # `word` مطفي افتراضيًا، بس لازم يوصل: مفتاح بالconfig
                 # ما بيغيّر شي هو مفتاح ميت — ونفس القاعدة اللي فرضت
