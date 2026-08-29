@@ -55,6 +55,26 @@ jobs:
           python -m autoreel.cli footage/input.mp4 --sizes all \
             --preview-frames -o out/prev.mp4 2>&1 | tee out/preview.log
 
+      # مقارنة تفريغ: نفس الصوت، موديلين. الهدف قياس مكسب الدقة مش
+      # افتراضه — أخطاء زي «يخصل» بدل «يحصل» ظهرت بمخرَج `small`.
+      - name: قارن small مقابل large-v3
+        run: |
+          set -euo pipefail
+          python - <<'PY' 2>&1 | tee out/transcripts.txt
+          import sys, json, time
+          sys.path.insert(0, '.')
+          from autoreel import transcribe as T
+          for m in ("small", "large-v3"):
+              t0 = time.time()
+              w = T.transcribe("footage/input.mp4", m, "ar",
+                               cache=T.cache_path("footage/input.mp4", m, "ar"))
+              print(f"### {m}  ({len(w)} كلمة · {time.time()-t0:.0f}s)")
+              print(" ".join(x["word"] for x in w))
+              print()
+              json.dump(w, open(f"out/words.{m}.json", "w", encoding="utf-8"),
+                        ensure_ascii=False)
+          PY
+
       # الترميز الكامل مع الكابشن. Whisper بيشتغل هون — شبكة المشغّل
       # مفتوحة، بعكس جلسة التطوير اللي `huggingface.co` مرفوض فيها.
       - name: الترميز الكامل مع الكابشن
@@ -108,7 +128,7 @@ jobs:
         run: |
           set -euo pipefail
           tmp="$(mktemp -d)"
-          cp out/*.png out/*.md out/*.log "$tmp/" 2>/dev/null || true
+          cp out/*.png out/*.md out/*.log out/*.txt out/*.json "$tmp/" 2>/dev/null || true
           cp out/reel.small.mp4 "$tmp/" 2>/dev/null || true
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

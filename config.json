@@ -1,6 +1,6 @@
 {
   "language": "ar",
-  "whisper_model": "small",
+  "whisper_model": "large-v3",
   "output": {
     "width": 1080,
     "height": 1920,
