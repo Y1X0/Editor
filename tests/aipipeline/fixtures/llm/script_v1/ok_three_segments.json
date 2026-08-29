@@ -1,0 +1,8 @@
+{
+  "text": "{\"segments\": [{\"segment_id\": 1, \"word_start\": 0, \"word_end\": 4, \"visual_mood_prompt\": \"slow motion dark rain on a window, charcoal grade\"}, {\"segment_id\": 2, \"word_start\": 4, \"word_end\": 7, \"visual_mood_prompt\": \"empty desert road at blue hour, deep shadows\"}, {\"segment_id\": 3, \"word_start\": 7, \"word_end\": 10, \"visual_mood_prompt\": \"candlelit stone arches, warm gold highlights\"}]}",
+  "usage": {
+    "input_tokens": 812,
+    "output_tokens": 143,
+    "cache_read_input_tokens": 640
+  }
+}

@@ -1,0 +1,3 @@
+{
+  "text": "{\"intents\": [{\"segment_id\": 1, \"query\": \"rain on glass\", \"shot_type\": \"macro\", \"palette\": \"charcoal\", \"must_include\": [\"rain\", \"night\"], \"must_avoid\": [\"people\"]}, {\"segment_id\": 2, \"query\": \"rain on glass\", \"shot_type\": \"wide\", \"palette\": \"deep_blue\", \"motion\": \"zoom_in\"}]}"
+}

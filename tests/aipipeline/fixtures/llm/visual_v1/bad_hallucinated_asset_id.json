@@ -1,0 +1,3 @@
+{
+  "text": "{\"intents\": [{\"segment_id\": 1, \"query\": \"rain on glass\", \"shot_type\": \"macro\", \"palette\": \"charcoal\", \"provider\": \"pexels\", \"provider_ref\": \"px_8562341\", \"file_path\": \"input/assets/segment_1.mp4\"}]}"
+}

@@ -1,0 +1,3 @@
+{
+  "text": "{\"segments\": [{\"segment_id\": 1, \"animation\": \"fade_in_scale\", \"size_step\": 0}, {\"segment_id\": 2, \"animation\": \"fade_in_up\", \"size_step\": -1, \"color_role\": \"accent\"}]}"
+}

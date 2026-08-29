@@ -80,10 +80,16 @@ def test_client_is_a_protocol_with_one_method():
 
 
 # ── ولا تطبيق مزوّد بهالمرحلة ────────────────────────────────────────
-def test_no_provider_implementation_exists_yet():
-    """الترتيب مقصود: العقود أولًا، والـLLM آخرًا."""
+def test_the_provider_surface_is_exactly_what_we_declared():
+    """الترتيب مقصود: العقود، ثم المزوّدان المحليّان، والـLLM آخرًا.
+
+    الحارس بيتحدّث **بقصد** مع كل مزوّد جديد. وهو اللي مسك إضافة
+    `recorded.py`/`scripted.py` بCommit 3 — يعني شغّال.
+    """
     have = {p.name for p in (ROOT / "ai_pipeline/agents/providers").glob("*.py")}
-    assert have == {"__init__.py", "base.py"}, f"زيادة: {have}"
+    assert have == {"__init__.py", "base.py", "recorded.py", "scripted.py"}, \
+        f"فرق غير معلَن: {have ^ {'__init__.py','base.py','recorded.py','scripted.py'}}"
+    assert "anthropic_client.py" not in have, "المزوّد الحقيقي لسا بدري"
 
 
 def test_the_package_imports_without_the_anthropic_sdk():
