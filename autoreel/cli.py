@@ -47,7 +47,7 @@ def _one_export(name, cfg, src, segs, w2, out_path, work, a, src_info=None,
 
     R.build_output(src, segs, caps, cfg, out_path, os.path.join(work, name),
                    dry_run=a.dry_run, src_info=src_info, cues=cues,
-                   speech_gain=speech_gain)
+                   speech_gain=speech_gain, music=getattr(a, "music", None))
 
     mb = "" if a.dry_run else f" · {os.path.getsize(out_path)/1e6:.1f}MB"
     return f"  {name:<8} {W}×{H}  fit={fit:<5} خط={size}{mb}  {out_path}"
@@ -65,6 +65,8 @@ def main():
     ap.add_argument("--no-motion", action="store_true")
     ap.add_argument("--sfx", action="store_true", help="شغّل المؤثرات الصوتية")
     ap.add_argument("--no-sfx", action="store_true", help="بلا مؤثرات صوتية")
+    ap.add_argument("--music", metavar="ملف",
+                    help="موسيقى خلفية — بتنلفّ لطول الريل. الترخيص مسؤوليتك")
     ap.add_argument("--keep", action="store_true", help="خلّي الملفات المؤقتة")
     ap.add_argument("--dry-run", action="store_true",
                     help="اطبع أوامر ffmpeg بدون ما تشغّلها")
