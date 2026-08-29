@@ -107,7 +107,7 @@ autoreel/
 ├── sfx.py          خطة المؤثرات — نقية بلا استيراد ولا نداء ffmpeg
 └── cli.py          نقطة التشغيل
 config.json         كل الإعدادات — عدّل هون مش بالكود
-fonts/              Tajawal + OFL.txt (رخصة الخط لحالها)
+fonts/              Tajawal + Amiri + AmiriQuran (كل واحد ورخصته)
 assets/sfx/         خمسة مؤثرات مولَّدة بالتركيب
 pyproject.toml      بناء + إعداد pytest (ولا pytest.ini منفصل)
 LICENSE             MIT — **الكود بس**، الخط تحت OFL
@@ -117,6 +117,33 @@ LICENSE             MIT — **الكود بس**، الخط تحت OFL
 فـ`pip install` بينسخ الكود بلا بياناته. لهيك ما في `[project.scripts]`
 والتشغيل المدعوم `python -m autoreel.cli` من الجذر. التفصيل والقياس
 بـ`ISSUES.md` / PKG-1.
+
+### والنظام التاني بالمستودع: `ai_pipeline/`
+
+المستودع فيه نظامان **معزولان**، بنفس الجذر:
+
+```
+autoreel/      المحرر — بياخد فيديو خام وبيطلّع ريل        (هالملف كله عنه)
+ai_pipeline/   التوليد — نص + صوت -> فيديو سينمائي        (ai_pipeline/CLAUDE.md)
+shared/        تفويض رقيق بينهن — **ولا سطر منطق**
+```
+
+**الاتجاه واحد، وعليه حرّاس بـ`tests/ai_pipeline/test_shared.py`:**
+
+```
+ai_pipeline  ──►  shared  ──►  autoreel
+autoreel     ──X──  shared          ممنوع — الحدّ بيصير دائرة
+```
+
+يعني: `autoreel` ما بتعرف إن `ai_pipeline` موجودة، وما بترث تبعياتها.
+تعديل هالملف أو `autoreel/` **ما بيلزمه** تعرف شي عن التوليد.
+
+واللي بينشارك اليوم: `render.run` · `cuts.probe` · `captions.render_caption`
+· `graph.piecewise`/`validate_fps`/`caption_sequence`. كلها بمكانها
+بـ`autoreel/`، و`shared/` بس بتعيد تصديرها.
+
+**قاعدة الترقية لـ`shared/`:** ينتقل اللي **مستدعىً من الاتنين فعلًا**،
+مش اللي *ممكن* يكون مشتركًا.
 
 ## تدفق البيانات
 

@@ -1,13 +1,35 @@
-# nur — مسار توليد فيديو عربي سينمائي
+# ai_pipeline — مسار توليد فيديو عربي سينمائي
 
 نص عربي + صوت → MP4 عمودي 1080×1920. **الذكاء الاصطناعي بيقرّر WHAT،
 والكود بينفّذ HOW.**
 
+نظام أخو `autoreel/` بنفس المستودع، **معزول عنه**. للحدّ بينهن شوف
+`CLAUDE.md` بالجذر — الخلاصة: `ai_pipeline ──► shared ──► autoreel`،
+اتجاه واحد، وعليه حرّاس.
+
 ```bash
-python -m pipeline.cli plan    projects/<id>    # بيستدعي LLM، بيكتب عقودًا
-python -m pipeline.cli fetch   projects/<id>    # شبكة
-python -m pipeline.cli render  projects/<id>    # حتمي — ولا نداء LLM
+python -m ai_pipeline.cli plan    projects/<id>   # بيستدعي LLM، بيكتب عقودًا
+python -m ai_pipeline.cli fetch   projects/<id>   # شبكة
+python -m ai_pipeline.cli render  projects/<id>   # حتمي — ولا نداء LLM
 ```
+
+## ⚠️ `final.mp4` صيغة تسليم، مش تمثيلًا داخليًا
+
+```
+ai_pipeline
+    ↓
+تمثيل المشروع  (Timeline · Assets · Typography · Audio)
+    ├──► لاحقًا: مشروع/timeline أصلي بالمحرر
+    └──► اليوم:  FFmpeg → final.mp4
+```
+
+**قرار مثبَّت:** التمثيل الكامل للمشروع بيضل بالعقود. `final.mp4` فرع
+من التمثيل، **مش التمثيل**. أي شي بينحسب وقت الرندر وما بينحفظ بعقد
+بيقفل باب التكامل الأصلي مع المحرر لاحقًا — وقتها التكامل بيصير إعادة
+كتابة بدل إضافة مُصدِّر.
+
+عمليًا: `timeline.json` لازم يكفّي لإعادة بناء المشروع كاملًا بلا ما
+تقرا كودًا. لو احتجت تشغّل الرندر عشان تعرف وين مقطع، فالعقد ناقص.
 
 ---
 
@@ -16,7 +38,7 @@ python -m pipeline.cli render  projects/<id>    # حتمي — ولا نداء L
 **لا تستخدم `arabic_reshaper` ولا `python-bidi`.** Pillow المبني مع
 **libraqm** بيعمل shaping + bidi لحاله.
 
-**وهاد مقيس، مش مأثورًا** (`SPIKE-FINDINGS.md` / F1):
+**وهاد مقيس، مش مأثورًا** (`docs/ai-video-pipeline/SPIKE-FINDINGS.md` / F1):
 
 ```
 arabic_reshaper.ArabicReshaper().configuration["delete_harakat"]  ->  True
@@ -128,19 +150,33 @@ ffmpeg بيرمّز **إطارات**، مش ثواني. `timeline.json` هو **�
 ## البنية
 
 ```
-pipeline/
-├── models/       العقود كأنواع Pydantic — بيانات فقط، ولا منطق
-├── validation/   بنيوي (schema) + دلالي (semantic.py)
-├── source.py     النص المصدر — تقطيع على المسافات، ولا تطبيع
-├── timeline/     quantize.py — **نقية**
-├── typography/   layout · raster · contrast   (نقية غالبًا)
-├── assets/       resolver · providers · cache
-├── renderer/     graph.py **نقية** · ffmpeg.py الوحيد اللي بينادي ffmpeg
-├── qa/           بيفحص **الملف**، مش الخطة
-└── llm/          adapters + RecordedClient للاختبار
-themes/           اللغة البصرية كـ**بيانات**، مش كنص prompt
-projects/<id>/    input · contracts · cache · output · logs
+ai_pipeline/
+├── models/       العقود كأنواع Pydantic — بيانات فقط، ولا منطق   ✅ Phase 1
+├── validation/   بنيوي (schema) + دلالي (semantic.py)            ✅ Phase 1
+├── source.py     النص المصدر — تقطيع على المسافات، ولا تطبيع     ✅ Phase 1
+├── timeline/     quantize.py — **نقية**                          ✅ Phase 1
+├── alignment/    فوق transcribe: محاذاة قسرية على النص المعطى    ⏳
+├── typography/   محوّل رقيق فوق shared.captions + حارس التباين    ⏳
+├── assets/       resolver · providers · cache · lockfile          ⏳
+├── renderer/     graph.py **نقية** (concat لـN أصول)              ⏳
+├── qa/           بيفحص **الملف**، مش الخطة                       ⏳
+├── agents/       script · visual · typography                     ⏳ Phase 8
+├── llm/          adapters + RecordedClient للاختبار               ⏳ Phase 8
+└── themes/       اللغة البصرية كـ**بيانات**، مش كنص prompt         ⏳
+
+بالجذر:
+shared/                    التفويض للمحرر — ولا سطر منطق
+fonts/                     Amiri · AmiriQuran (وTajawal للمحرر)
+tests/ai_pipeline/         اختبارات هالنظام
+experiments/ai_pipeline/   الـspike — تحقيق، مش تصميمًا
+docs/ai-video-pipeline/    SPIKE-FINDINGS.md
+projects/<id>/             input · contracts · cache · output · logs
 ```
+
+**ولا استيراد مباشر لـ`autoreel`.** كل شي بيمرق عبر `shared/`، وعليه
+حارس. الجاهز اليوم للاستعمال: `shared.captions.render_caption`
+(مقيسة على النص القرآني — بترسمه صح ولا بتقصّه)، `shared.frames`،
+`shared.probe`، `shared.ffmpeg`.
 
 **حدّ النقاء صريح:** `quantize`، `graph.build`، `typography.layout` دوال
 نقية. الوحدات اللي بتلمس العالم اتنتين: `io` و`renderer/ffmpeg.py`.
@@ -167,8 +203,8 @@ SegmentsContract.model_validate_json(text)     # ✅ مصفوفة JSON -> tuple
 ## الاختبارات
 
 ```bash
-.venv/bin/python -m pytest -q
-pytest -m "not golden"      # بدون الصور المرجعية (مكدّس خطوط مختلف)
+.venv/bin/python -m pytest tests/ai_pipeline -q   # هالنظام بس
+.venv/bin/python -m pytest -q                     # المستودع كله
 ```
 
 ### قاعدة: افحص الحارس بحالة سيّئة معروفة
