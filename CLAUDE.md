@@ -128,7 +128,7 @@ ai_pipeline/   التوليد — نص + صوت -> فيديو سينمائي    
 shared/        تفويض رقيق بينهن — **ولا سطر منطق**
 ```
 
-**الاتجاه واحد، وعليه حرّاس بـ`tests/ai_pipeline/test_shared.py`:**
+**الاتجاه واحد، وعليه حرّاس بـ`tests/aipipeline/test_shared.py`:**
 
 ```
 ai_pipeline  ──►  shared  ──►  autoreel

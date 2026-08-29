@@ -167,7 +167,7 @@ ai_pipeline/
 بالجذر:
 shared/                    التفويض للمحرر — ولا سطر منطق
 fonts/                     Amiri · AmiriQuran (وTajawal للمحرر)
-tests/ai_pipeline/         اختبارات هالنظام
+tests/aipipeline/           اختبارات هالنظام (بلا شرطة — شوف __init__.py هناك)
 experiments/ai_pipeline/   الـspike — تحقيق، مش تصميمًا
 docs/ai-video-pipeline/    SPIKE-FINDINGS.md
 projects/<id>/             input · contracts · cache · output · logs
@@ -203,7 +203,7 @@ SegmentsContract.model_validate_json(text)     # ✅ مصفوفة JSON -> tuple
 ## الاختبارات
 
 ```bash
-.venv/bin/python -m pytest tests/ai_pipeline -q   # هالنظام بس
+.venv/bin/python -m pytest tests/aipipeline -q    # هالنظام بس
 .venv/bin/python -m pytest -q                     # المستودع كله
 ```
 

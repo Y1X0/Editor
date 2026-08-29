@@ -71,7 +71,7 @@ def test_every_marker_used_in_the_suite_is_declared(proj):
     """
     declared = {m.split(":")[0] for m in proj["tool"]["pytest"]["ini_options"]["markers"]}
     used = set()
-    # `os.walk` مش `os.listdir`: الطقم صار فيه `tests/ai_pipeline/`، و
+    # `os.walk` مش `os.listdir`: الطقم صار فيه `tests/aipipeline/`، و
     # المسح المسطّح كان بيخلّيها نقطة عمى — علامة غير معلَنة هناك
     # بتمرق، وهاد بالضبط الخلل اللي هالفحص موجود ليمنعه.
     for d, _, names in os.walk(os.path.join(ROOT, "tests")):

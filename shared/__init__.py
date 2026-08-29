@@ -11,5 +11,5 @@
     ai_pipeline  ──►  shared  ──►  autoreel
     autoreel     ──X──  shared            (ممنوع — الحدّ بيصير دائرة)
 
-وعليه حارس بالاختبارات: `tests/ai_pipeline/test_shared.py`.
+وعليه حارس بالاختبارات: `tests/aipipeline/test_shared.py`.
 """
