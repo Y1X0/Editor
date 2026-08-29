@@ -32,8 +32,8 @@
   "captions": {
     "enabled": true,
     "font": "fonts/Tajawal-ExtraBold.ttf",
-    "size": 74,
-    "max_words": 4,
+    "size": 45,
+    "max_words": 3,
     "color": [
       255,
       255,
@@ -41,16 +41,16 @@
     ],
     "highlight": [
       255,
-      92,
-      58
+      255,
+      255
     ],
     "box": [
+      114,
       18,
-      18,
-      18,
-      215
+      13,
+      255
     ],
-    "y_ratio": 0.72
+    "y_ratio": 0.64
   },
   "sfx": {
     "enabled": false,
