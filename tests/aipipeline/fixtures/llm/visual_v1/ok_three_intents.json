@@ -1,0 +1,3 @@
+{
+  "text": "{\"intents\": [{\"segment_id\": 1, \"query\": \"rain running down dark window glass\", \"shot_type\": \"macro\", \"palette\": \"charcoal\", \"motion\": \"zoom_in\"}, {\"segment_id\": 2, \"query\": \"empty desert road at blue hour\", \"shot_type\": \"wide\", \"palette\": \"deep_blue\", \"motion\": \"pan_left\"}, {\"segment_id\": 3, \"query\": \"candlelight on carved stone arches\", \"shot_type\": \"medium\", \"palette\": \"warm_gold\", \"motion\": \"none\"}]}"
+}
