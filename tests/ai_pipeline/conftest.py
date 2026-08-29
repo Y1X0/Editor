@@ -1,10 +1,10 @@
 import pytest
 
-from pipeline.models.alignment import Alignment, Word
-from pipeline.models.assets import Asset, AssetsContract, Probe
-from pipeline.models.project import Output
-from pipeline.models.segments import Segment, SegmentsContract
-from pipeline.source import tokenize
+from ai_pipeline.models.alignment import Alignment, Word
+from ai_pipeline.models.assets import Asset, AssetsContract, Probe
+from ai_pipeline.models.project import Output
+from ai_pipeline.models.segments import Segment, SegmentsContract
+from ai_pipeline.source import tokenize
 
 SCRIPT = "وَمَن يَتَوَكَّلْ عَلَى اللَّهِ فَهُوَ حَسْبُهُ إِنَّ اللَّهَ بَالِغُ أَمْرِهِ"
 # 0    1        2      3       4      5       6    7        8      9

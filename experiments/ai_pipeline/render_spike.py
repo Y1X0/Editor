@@ -13,12 +13,12 @@ from PIL import Image, ImageDraw, ImageFont
 import numpy as np, imageio_ffmpeg
 
 FF = imageio_ffmpeg.get_ffmpeg_exe()
-ROOT = Path("spike/out"); SRC = ROOT/"src"; TYPO = ROOT/"typo"
+ROOT = Path("experiments/ai_pipeline/out"); SRC = ROOT/"src"; TYPO = ROOT/"typo"
 W, H, FPS, SR = 1080, 1920, 30, 48000
 SPF = SR // FPS                      # 1600 عيّنة/إطار — عدد صحيح
 assert SR % FPS == 0, "sr/fps لازم يكون صحيحًا"
 
-FONT_P = "assets/fonts/AmiriQuran-Regular.ttf"
+FONT_P = "fonts/AmiriQuran-Regular.ttf"
 FSIZE  = 64
 TEXT_RGB = (243, 229, 171)
 BOX_X, BOX_Y, BOX_W = 80, 1180, 920

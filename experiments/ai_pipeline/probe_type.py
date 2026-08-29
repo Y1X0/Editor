@@ -10,7 +10,7 @@
 from PIL import Image, ImageDraw, ImageFont, features
 import json, sys
 
-FONT = "assets/fonts/Amiri-Bold.ttf"
+FONT = "fonts/Amiri-Bold.ttf"
 SIZE = 72
 AYAH = "وَمَن يَتَوَكَّلْ عَلَى اللَّهِ فَهُوَ حَسْبُهُ"
 PLAIN = "ومن يتوكل على الله فهو حسبه"
@@ -65,7 +65,7 @@ for name, s in (("source_codepoints", ALLAH_SRC), ("presentation_forms", ALLAH_P
 im = Image.new("RGB", (1400, 200), (18, 18, 20))
 ImageDraw.Draw(im).text((1350, 100), MIXED, font=f, fill=(243, 229, 171),
                         direction="rtl", language="ar", anchor="rm")
-im.save("spike/out/q4_mixed.png")
+im.save("experiments/ai_pipeline/out/q4_mixed.png")
 
 # صورة شاهدة للعين
 im2 = Image.new("RGB", (1400, 320), (18, 18, 20))
@@ -74,6 +74,6 @@ d2.text((1350, 90), AYAH, font=f, fill=(243, 229, 171),
         direction="rtl", language="ar", anchor="rm")
 d2.text((1350, 230), PLAIN, font=f, fill=(243, 229, 171),
         direction="rtl", language="ar", anchor="rm")
-im2.save("spike/out/q2_tashkeel.png")
+im2.save("experiments/ai_pipeline/out/q2_tashkeel.png")
 
 print(json.dumps(out, ensure_ascii=False, indent=2))

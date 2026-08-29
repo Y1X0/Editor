@@ -4,10 +4,10 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from pipeline.models.project import Output
-from pipeline.models.segments import SegmentsContract
-from pipeline.models.timeline import Span, Timeline
-from pipeline.models.typography import TypographyContract
+from ai_pipeline.models.project import Output
+from ai_pipeline.models.segments import SegmentsContract
+from ai_pipeline.models.timeline import Span, Timeline
+from ai_pipeline.models.typography import TypographyContract
 
 
 def _seg(sid, a, b, text="نص"):

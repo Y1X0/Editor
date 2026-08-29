@@ -1,11 +1,11 @@
 """المُكمِّم — الحدّ بين الثواني والإطارات."""
 import pytest
 
-from pipeline.errors import AssetError, TimelineError
-from pipeline.models.alignment import Alignment, Word
-from pipeline.models.assets import Asset, AssetsContract, Probe
-from pipeline.models.project import Output
-from pipeline.timeline.quantize import quantize
+from ai_pipeline.errors import AssetError, TimelineError
+from ai_pipeline.models.alignment import Alignment, Word
+from ai_pipeline.models.assets import Asset, AssetsContract, Probe
+from ai_pipeline.models.project import Output
+from ai_pipeline.timeline.quantize import quantize
 
 
 def test_covers_whole_strip(output, segments, alignment, assets, audio_duration):

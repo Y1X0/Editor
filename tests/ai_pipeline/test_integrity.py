@@ -1,9 +1,9 @@
 """§19 — سلامة النص الديني. أهم ملف اختبارات بالمشروع."""
 import pytest
 
-from pipeline.errors import AlignmentError, AssetError, ContractError, TextIntegrityError
-from pipeline.models.segments import Segment, SegmentsContract
-from pipeline.validation.semantic import (
+from ai_pipeline.errors import AlignmentError, AssetError, ContractError, TextIntegrityError
+from ai_pipeline.models.segments import Segment, SegmentsContract
+from ai_pipeline.validation.semantic import (
     check_alignment_covers, check_alignment_matches_source, check_assets,
     check_coverage, check_text_integrity,
 )
@@ -100,7 +100,7 @@ def test_missing_asset_file_fails(assets, segments, tmp_path):
 
 
 def test_asset_for_unknown_segment_fails(assets, segments, tmp_path):
-    from pipeline.models.assets import AssetsContract
+    from ai_pipeline.models.assets import AssetsContract
     extra = assets.assets[0].model_copy(update={"segment_id": 9})
     with pytest.raises(AssetError, match="مش موجودة"):
         check_assets(AssetsContract(assets=(*assets.assets, extra)),

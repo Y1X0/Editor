@@ -14,3 +14,8 @@ dist/
 # بيئات افتراضية محلية — بتنعمل بالجذر وقت التطوير
 .venv/
 venv/
+
+# مخرجات spike تبع ai_pipeline — بتتولّد بالتشغيل
+experiments/ai_pipeline/out/
+# مشاريع ai_pipeline المحلية (مدخلات/كاش/مخرجات)
+projects/
