@@ -54,6 +54,11 @@
     ],
     "y_ratio": 0.64
   },
+  "music": {
+    "gain": 0.12,
+    "speech_gain": 0.85,
+    "fade": 1.0
+  },
   "sfx": {
     "enabled": false,
     "min_gap": 0.12,

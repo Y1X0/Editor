@@ -279,9 +279,91 @@ def sfx_chain(cues, inputs, in_label="acat", out_label="amixed",
     return parts
 
 
+# الموسيقى الخلفية. **مش أصلًا مكمومًا** — المستخدم بيجيب مساره
+# بـ`--music`، والترخيص مسؤوليته. نفس سبب `assets/sfx` المولَّدة:
+# ما منشحن صوتًا مش عنا.
+DEFAULT_MUSIC_GAIN = 0.12
+DEFAULT_MUSIC_SPEECH_GAIN = 0.85
+DEFAULT_MUSIC_FADE = 1.0
+
+
+def music_chain(music_input, in_label="acat", out_label="amus",
+                total_samples=None, gain=DEFAULT_MUSIC_GAIN,
+                speech_gain=DEFAULT_MUSIC_SPEECH_GAIN,
+                fade=DEFAULT_MUSIC_FADE, sr=DEFAULT_SR):
+    """
+    مزج موسيقى خلفية على ناقل الصوت. **دالة نقية — نص داخل، نص برّا.**
+
+    الشكل:
+
+        [m:a] aformat=sample_rates=SR:channel_layouts=stereo
+              , atrim=end_sample=N            ← المدخَل ملفوف بلا نهاية
+              , volume=<كسب الموسيقى>
+              , afade=in:start_sample=0
+              , afade=out:start_sample=N-F
+              , apad, atrim=end_sample=N      ← تثبيت الطول
+        [acat]volume=<كسب الكلام>
+        [bus][mus] amix=inputs=2:duration=first:normalize=0
+              , apad, atrim=end_sample=N
+
+    **نفس قواعد `sfx_chain`، وللأسباب نفسها:**
+
+    * `aformat` **أول شي** — كل رقم بعدها فهرس عيّنة، وفهرس العيّنة
+      بمعدّل غلط بيزحلق كل شي بصمت (أصل 44.1k: +٨٨ms).
+    * `normalize=0` إلزامية — بدونها `amix` بتقسّم على عدد المدخلات
+      فالكلام بيخفت للنص **وبيتنفّس** مع الموسيقى.
+    * `apad,atrim=end_sample` — الطول قرارنا مش قرار `amix`. نفس
+      الحادثة اللي كسرت ٤ فحوص على ffmpeg 6.1.1.
+    * `afade` بـ`start_sample`/`nb_samples` مش `st`/`d` بالثواني —
+      الفهرس هو الزمن بهالمشروع، وما في سبب نكسر القاعدة للتلاشي.
+
+    **اللف بينصير بمدخَل ffmpeg (`-stream_loop -1`) مش بـ`aloop`.**
+    `aloop=size=N` بتحمّل N عيّنة بالذاكرة؛ مقطع تلات دقايق = ٨.٦
+    مليون عيّنة ستيريو. و`-stream_loop` بتخلّي المُفكِّك يلفّ بلا
+    تخزين.
+
+    **الهامش بالحساب مش بالحظ**، زي `sfx_chain`:
+
+        الناقل ≤ ١.٠ × ٠.٨٥  +  الموسيقى ١.٠ × ٠.١٢  =  ٠.٩٧ < ١.٠
+
+    ومع المؤثرات مشغّلة الناقل أصلًا ≤ ٠.٩٢٥، فالمجموع ٠.٩٠٦. الحارس
+    تحت بيرمي بدل ما يقصّ بصمت.
+    """
+    if not 0 <= gain <= 1:
+        raise ValueError(f"music.gain لازم بين ٠ و١: {gain}")
+    if not 0 <= speech_gain <= 1:
+        raise ValueError(f"music.speech_gain لازم بين ٠ و١: {speech_gain}")
+    if speech_gain + gain >= 1.0:
+        raise ValueError(
+            f"هامش الصوت: speech_gain {speech_gain} + gain {gain} = "
+            f"{speech_gain + gain:.3f} ≥ ١.٠ — الذروة رح تنقصّ. "
+            f"صغّر `music.gain` أو `music.speech_gain`.")
+
+    parts = []
+    head = f"[{music_input}:a]aformat=sample_rates={sr}:channel_layouts=stereo"
+    if total_samples is not None:
+        n = int(total_samples)
+        f = max(1, int(round(fade * sr)))
+        # التلاشي أطول من المقطع بيخلّي `start_sample` سالبة.
+        f = min(f, max(1, n // 2))
+        head += (f",atrim=end_sample={n},volume={gain:.4f}"
+                 f",afade=t=in:curve=tri:start_sample=0:nb_samples={f}"
+                 f",afade=t=out:curve=tri:start_sample={n - f}:nb_samples={f}"
+                 f",apad,atrim=end_sample={n}")
+    else:
+        head += f",volume={gain:.4f}"
+    parts.append(f"{head}[mus]")
+    parts.append(f"[{in_label}]volume={speech_gain:.4f}[bus]")
+    mix = "amix=inputs=2:duration=first:normalize=0"
+    if total_samples is not None:
+        mix += f",apad,atrim=end_sample={int(total_samples)}"
+    parts.append(f"[bus][mus]{mix}[{out_label}]")
+    return parts
+
+
 def audio_chain(fps, starts, plan, out_labels, sr=DEFAULT_SR,
                 cues=None, sfx_inputs=None,
-                speech_gain=DEFAULT_SPEECH_GAIN):
+                speech_gain=DEFAULT_SPEECH_GAIN, music_input=None, music=None):
     """
     `atrim` على حدود الإطارات، ثم `concat`، ثم نسخة لكل مخرَج.
 
@@ -329,6 +411,18 @@ def audio_chain(fps, starts, plan, out_labels, sr=DEFAULT_SR,
                            out_label="amixed", speech_gain=speech_gain, sr=sr,
                            total_samples=sum(plan) * spf)
         tail = "amixed"
+
+    # الموسيقى **بعد** المؤثرات: بتنمزج على الناقل كامل (كلام + مؤثرات)
+    # فالهامش بينحسب على قيمة وحدة معروفة، مش على مجموع فروع متفرّقة.
+    if music_input is not None:
+        m = music or {}
+        parts += music_chain(music_input, in_label=tail, out_label="amus",
+                             total_samples=sum(plan) * spf,
+                             gain=m.get("gain", DEFAULT_MUSIC_GAIN),
+                             speech_gain=m.get("speech_gain",
+                                               DEFAULT_MUSIC_SPEECH_GAIN),
+                             fade=m.get("fade", DEFAULT_MUSIC_FADE), sr=sr)
+        tail = "amus"
 
     # قيد حقيقي: كل تسمية مخرَج بالفلتر بتنربط **مرة وحدة**.
     if len(out_labels) == 1:
@@ -532,7 +626,8 @@ def caption_sequence(cap_frames, total_frames):
 def build_graph(cfg, plan, starts, sizes, src_w, src_h,
                 caption_inputs=None, sr=DEFAULT_SR, with_audio=True,
                 cues=None, sfx_inputs=None,
-                speech_gain=DEFAULT_SPEECH_GAIN, colors=None):
+                speech_gain=DEFAULT_SPEECH_GAIN, colors=None,
+                music_input=None):
     """
     الرسم كامل.
 
@@ -563,7 +658,9 @@ def build_graph(cfg, plan, starts, sizes, src_w, src_h,
     if with_audio:
         parts += audio_chain(fps, starts, plan, alabels, sr=sr,
                              cues=cues, sfx_inputs=sfx_inputs,
-                             speech_gain=speech_gain)
+                             speech_gain=speech_gain,
+                             music_input=music_input,
+                             music=cfg.get("music"))
 
     maps = []
     for i, (name, scfg) in enumerate(sizes):

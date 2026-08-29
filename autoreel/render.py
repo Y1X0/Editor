@@ -314,7 +314,7 @@ def materialise_captions(cap_frames, total_frames, outdir):
 
 def build_output(src, segs, caps, cfg, out_path, workdir,
                  dry_run=False, src_info=None, cues=None,
-                 speech_gain=G.DEFAULT_SPEECH_GAIN):
+                 speech_gain=G.DEFAULT_SPEECH_GAIN, music=None):
     """
     المخرَج النهائي كامل — صورة وصوت وكابشن — بتشغيلة ffmpeg **وحدة**.
 
@@ -369,11 +369,24 @@ def build_output(src, segs, caps, cfg, out_path, workdir,
     else:
         cues = None
 
+    # **`-stream_loop -1` مش `aloop`.** المُفكِّك بيلفّ بلا ما يخزّن؛
+    # `aloop=size=N` بتحمّل N عيّنة بالذاكرة (مقطع تلات دقايق = ٨.٦
+    # مليون ستيريو). والقصّ لطول الريل بيصير بالرسم.
+    #
+    # وبلا صوت بالمصدر ما في ناقل نمزج عليه — الموسيقى بتنطفي، تمامًا
+    # زي المؤثرات.
+    music_input = None
+    if music and has_audio:
+        music_input = nin
+        inputs += ["-stream_loop", "-1", "-i", str(music)]
+        nin += 1
+
     graph, maps = G.build_graph(cfg, plan, starts, [(name, cfg)], sw, sh,
                                 caption_inputs=caption_inputs,
                                 with_audio=has_audio,
                                 cues=cues, sfx_inputs=sfx_inputs,
-                                speech_gain=speech_gain, colors=colors)
+                                speech_gain=speech_gain, colors=colors,
+                                music_input=music_input)
     gpath = os.path.join(workdir, "graph.txt")
     with open(gpath, "w", encoding="utf-8") as f:
         f.write(graph)

@@ -75,6 +75,7 @@ def test_no_dead_keys_left_behind(raw):
         "captions.max_words", "captions.color", "captions.highlight",
         "captions.box", "captions.y_ratio", "captions.karaoke",
         "sfx.enabled", "sfx.min_gap", "sfx.speech_gain", "sfx.events",
+        "music.gain", "music.speech_gain", "music.fade",
         "exports",
     }
     actual = set()
@@ -153,6 +154,27 @@ def test_motion_zoom_cycle_reaches_the_filter(cfg, tmp_path, capsys):
                    bumped(cfg, ["motion", "zoom_cycle"], [1.0, 1.5]),
                    str(tmp_path / "o.mp4"), str(tmp_path), dry_run=True)
     assert a != capsys.readouterr().out
+
+
+def test_music_gain_reaches_the_filter(cfg):
+    a = "\n".join(G.music_chain(2, total_samples=48000,
+                                gain=cfg["music"]["gain"]))
+    b = "\n".join(G.music_chain(2, total_samples=48000, gain=0.05))
+    assert a != b, "music.gain ما وصل سلسلة الفلاتر"
+
+
+def test_music_speech_gain_reaches_the_filter(cfg):
+    a = "\n".join(G.music_chain(2, total_samples=48000,
+                                speech_gain=cfg["music"]["speech_gain"]))
+    b = "\n".join(G.music_chain(2, total_samples=48000, speech_gain=0.60))
+    assert a != b, "music.speech_gain ما وصل سلسلة الفلاتر"
+
+
+def test_music_fade_reaches_the_filter(cfg):
+    a = "\n".join(G.music_chain(2, total_samples=48000 * 5,
+                                fade=cfg["music"]["fade"]))
+    b = "\n".join(G.music_chain(2, total_samples=48000 * 5, fade=0.25))
+    assert a != b, "music.fade ما وصل سلسلة الفلاتر"
 
 
 def test_captions_karaoke_changes_the_number_of_frames(cfg, tmp_path):

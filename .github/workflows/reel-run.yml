@@ -61,6 +61,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m autoreel.cli footage/input.mp4 --sizes reel \
+            --music assets/music/bed.wav \
             -o out/reel.mp4 2>&1 | tr '\r' '\n' | tee out/render.log | tail -20
           test -s out/reel.mp4
 
