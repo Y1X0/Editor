@@ -283,8 +283,22 @@ def test_the_local_providers_touch_no_network(mod):
             assert n.split(".")[0] not in banned, f"{mod}: {n}"
 
 
-def test_no_real_provider_exists_yet():
-    """الترتيب مقصود: المحليّان أولًا، والحقيقي آخرًا."""
+def test_the_local_providers_are_still_the_test_path():
+    """المزوّد الحقيقي انضاف بCommit 6، والمحليّان ضلّوا مصدر الاختبارات.
+
+    الحارس هون على **العزل**: ولا اختبار بهالملف بيلمس
+    `anthropic_client`، فالمسار المفحوص بيضل بلا شبكة.
+    """
     have = {p.name for p in (ROOT / "ai_pipeline/agents/providers").glob("*.py")}
-    assert have == {"__init__.py", "base.py", "recorded.py", "scripted.py"}
-    assert "anthropic_client.py" not in have
+    assert have >= {"recorded.py", "scripted.py"}
+    # الفحص على **الاستيرادات**، مش على نصّ الملف: البحث النصّي بيلاقي
+    # الاسم بجملة التأكيد نفسها. حارس بيقرا حاله ما بيحرس شي.
+    tree = ast.parse(pathlib.Path(__file__).read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        mods = []
+        if isinstance(node, ast.Import):
+            mods = [a.name for a in node.names]
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            mods = [node.module]
+        for m in mods:
+            assert "anthropic" not in m, f"هالطقم استورد {m} — العزل انكسر"

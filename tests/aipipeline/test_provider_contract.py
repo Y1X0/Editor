@@ -86,25 +86,35 @@ def test_the_provider_surface_is_exactly_what_we_declared():
     الحارس بيتحدّث **بقصد** مع كل مزوّد جديد. وهو اللي مسك إضافة
     `recorded.py`/`scripted.py` بCommit 3 — يعني شغّال.
     """
+    want = {"__init__.py", "base.py", "recorded.py", "scripted.py",
+            "anthropic_client.py"}
     have = {p.name for p in (ROOT / "ai_pipeline/agents/providers").glob("*.py")}
-    assert have == {"__init__.py", "base.py", "recorded.py", "scripted.py"}, \
-        f"فرق غير معلَن: {have ^ {'__init__.py','base.py','recorded.py','scripted.py'}}"
-    assert "anthropic_client.py" not in have, "المزوّد الحقيقي لسا بدري"
+    assert have == want, f"فرق غير معلَن: {have ^ want}"
 
 
 def test_the_package_imports_without_the_anthropic_sdk():
-    import sys
-    assert "anthropic" not in sys.modules or True
+    """`anthropic` تبعية اختيارية. استيرادها على مستوى موديول بيكسر
+    استيراد الحزمة كلها على بيئة بلا SDK — ومعه الطقم كله.
+
+    المسموح **وحيد**: جوّا دالة بـ`anthropic_client.py`.
+    """
+    allowed = ROOT / "ai_pipeline/agents/providers/anthropic_client.py"
     for f in (ROOT / "ai_pipeline").rglob("*.py"):
-        for node in ast.walk(ast.parse(f.read_text(encoding="utf-8"))):
+        tree = ast.parse(f.read_text(encoding="utf-8"))
+        top = list(tree.body)
+        nested = [n for n in ast.walk(tree) if n not in top]
+        for node, level in [(n, "module") for n in top] + \
+                           [(n, "nested") for n in nested]:
             names = []
             if isinstance(node, ast.Import):
                 names = [a.name for a in node.names]
             elif isinstance(node, ast.ImportFrom) and node.module:
                 names = [node.module]
-            assert not any(n.split(".")[0] == "anthropic" for n in names), (
-                f"{f.relative_to(ROOT)}: استيراد anthropic — "
-                f"لازم يكون جوّا الدالة، وبس بـanthropic_client.py")
+            if not any(n.split(".")[0] == "anthropic" for n in names):
+                continue
+            assert level == "nested" and f == allowed, (
+                f"{f.relative_to(ROOT)}: استيراد anthropic على مستوى "
+                f"{level} — المسموح جوّا دالة بـanthropic_client.py فقط")
 
 
 # ── errors.py: append-only ───────────────────────────────────────────

@@ -35,6 +35,10 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0"]
+# طبقة وكلاء `ai_pipeline`. **اختيارية بقصد:** الطقم كله بيشتغل بلا
+# `anthropic` مثبَّتة، وبلا شبكة، وبلا مفتاح — الاستيراد جوّا الدالة
+# بـ`agents/providers/anthropic_client.py`، وعليه حارس `ast`.
+ai = ["anthropic>=0.40"]
 
 [project.urls]
 Homepage = "https://github.com/y1x0/editor"
