@@ -69,6 +69,7 @@ markers = [
     "golden: مقارنة بصورة مرجعية — حسّاسة لإصدار Pillow/HarfBuzz، عطّلها بـ -m \"not golden\"",
     "slow: ترميز ffmpeg حقيقي — دقايق مش ثواني، عطّلها بـ -m \"not slow\"",
     "sfx: قبول المؤثرات الصوتية على ناتج ffmpeg، عطّلها بـ -m \"not sfx\"",
+    "ffmpeg: بيبني ملفات ffmpeg حقيقية للفحص، عطّلها بـ -m \"not ffmpeg\"",
 ]
 
 # ملاحظة مثبَّتة على مستوى المستودع: `arabic-reshaper` و`python-bidi`

@@ -105,3 +105,40 @@ def test_asset_for_unknown_segment_fails(assets, segments, tmp_path):
     with pytest.raises(AssetError, match="مش موجودة"):
         check_assets(AssetsContract(assets=(*assets.assets, extra)),
                      segments, tmp_path)
+
+
+# ── §13 typography مفقودة · §14 project_id/theme غلط ────────────────
+def _typo(ids, theme="dark_gold_v1"):
+    from ai_pipeline.models.typography import TypographyContract
+    return TypographyContract(
+        theme=theme,
+        segments=tuple({"segment_id": i, "animation": "fade"} for i in ids))
+
+
+def test_matching_typography_passes(segments):
+    from ai_pipeline.validation.semantic import check_typography
+    check_typography(_typo([1, 2, 3]), segments, "dark_gold_v1")
+
+
+def test_missing_typography_for_a_segment_fails(segments):
+    from ai_pipeline.errors import ContractError
+    from ai_pipeline.validation.semantic import check_typography
+    with pytest.raises(ContractError, match="مقاطع بلا typography"):
+        check_typography(_typo([1, 2]), segments, "dark_gold_v1")
+
+
+def test_typography_for_an_unknown_segment_fails(segments):
+    from ai_pipeline.errors import ContractError
+    from ai_pipeline.validation.semantic import check_typography
+    with pytest.raises(ContractError, match="مش موجودة"):
+        check_typography(_typo([1, 2, 3, 9]), segments, "dark_gold_v1")
+
+
+def test_theme_mismatch_fails(segments):
+    """بديل «wrong project_id»: `project_id` ما عاد بالعقود الفرعية،
+    فالتناقض الوحيد الممكن هو الإشارة لـtheme غير theme المشروع."""
+    from ai_pipeline.errors import ContractError
+    from ai_pipeline.validation.semantic import check_typography
+    with pytest.raises(ContractError, match="بتشير لـtheme"):
+        check_typography(_typo([1, 2, 3], theme="other_theme"), segments,
+                         "dark_gold_v1")
