@@ -28,9 +28,9 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from typing import Mapping
+from typing import Literal, Mapping
 
-from pydantic import Field, ValidationError
+from pydantic import Field, ValidationError, model_validator
 
 from ..errors import AssetError, ContractError
 from ..models.assets import AssetsContract, Probe, SourceType
@@ -38,10 +38,63 @@ from ..models.base import SHA256, StrictModel
 from .expand import ResolvedAsset, ThemeView, expand_asset_intents
 from .schemas import AssetIntent, AssetIntentItem, Palette, ShotType
 
+# ── مفردات التحليل — مغلقة، زي مفردات النيّة بـ`schemas.py` ──────────
+Subject = Literal["none", "person", "hands", "object", "screen", "place"]
+Environment = Literal["indoor", "outdoor", "studio", "abstract"]
+ActionLevel = Literal["static", "slow", "moderate", "fast"]
+CameraMove = Literal["locked", "handheld", "pan", "tilt", "dolly", "drone"]
+ShotScale = Literal["extreme_wide", "wide", "medium", "close", "macro"]
+Composition = Literal["centered", "left", "right", "full_bleed"]
+EnergyLevel = Literal["calm", "neutral", "dynamic", "intense"]
+SafeArea = Literal["bottom", "top", "none"]
+
 #: هامش أمان فوق المدة المطلوبة، بالثواني. مش تجميلًا: `probe.duration`
 #: مقرَّبة لجزء المئة، وحدّ المقطع بينحسب بالإطارات — فأصل بالضبط على
 #: المقاس بيقدر ينقص إطارًا واحدًا عند التكميم.
 DURATION_MARGIN_S = 0.10
+
+
+class AssetAnalysis(StrictModel):
+    """وصف **ما في اللقطة**، لا ما اسمها.
+
+    الـResolver اليوم بيرجّح باسم الملف: `4 × تقاطع الكلمات + 3 × نفس
+    `shot_type` + 2 × نفس `palette``. يعني اسم الملف هو الذكاء كله، وولا
+    شي بيعرف عن الحركة ولا التأطير ولا صلاحية اللقطة للكابشن.
+
+    **كلها اختيارية بقصد.** كتالوج قديم بلا تحليل لازم يضل صالحًا —
+    وهاد شرط الترحيل: الغياب بيعطي سلوك اليوم بالضبط، لا خطأً ولا
+    قيمة مخترَعة.
+
+    **مصدر البيانات بشري بالمرحلة الأولى.** الحقول مصمَّمة لتنقاس آليًا
+    لاحقًا (`action` و`energy` و`camera` من ffmpeg، و`safe_caption_area`
+    من تباين الشريط السفلي) بلا كسر العقد — لأن كلها مفردات مغلقة
+    ثابتة، فالمصدر بيتبدّل والقيم لأ.
+    """
+
+    subject: Subject | None = None
+    environment: Environment | None = None
+    action: ActionLevel | None = None
+    camera: CameraMove | None = None
+    shot_scale: ShotScale | None = None
+    composition: Composition | None = None
+    energy: EnergyLevel | None = None
+    safe_caption_area: SafeArea | None = None
+    #: **أفضل نافذة داخل الملف** `(بداية, نهاية)` بالثواني.
+    #:
+    #: أعلى حقل قيمة بالتحليل كله. اليوم `in_point_for` بتتوسّط رياضيًا
+    #: — بتاخد منتصف الملف بلا أي علم بأين الحركة. مع هالحقل بيصير
+    #: الاختيار عن **أفضل ثانيتين** لا عن المنتصف.
+    best_window: tuple[float, float] | None = None
+    semantic_tags: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def _window_sane(self) -> "AssetAnalysis":
+        if self.best_window is not None:
+            a, b = self.best_window
+            if not (0.0 <= a < b):
+                raise ValueError(
+                    f"best_window غير صالحة: ({a}, {b}) — لازم 0 ≤ بداية < نهاية")
+        return self
 
 
 class CatalogEntry(StrictModel):
@@ -63,6 +116,8 @@ class CatalogEntry(StrictModel):
     palette: Palette = "monochrome"
     attribution: str | None = None
     source_type: SourceType = "local"
+    #: **اختياري.** كتالوج بلا تحليل بيشتغل بالضبط زي اليوم.
+    analysis: AssetAnalysis | None = None
 
 
 class Catalog(StrictModel):
@@ -182,9 +237,24 @@ def in_point_for(entry: CatalogEntry, required_s: float,
     `quantize`** — القطع بيضل بالـtimeline، والعين ما بتشوفه.
 
     وبترجع للتوسيط لو الباقي ما بيكفّي، بدل ما تتجاوز نهاية الأصل.
+
+    **و`best_window` بتغلب التوسيط لما تكون موجودة.** التوسيط الرياضي
+    بياخد منتصف الملف بلا أي علم بأين الحركة — ولقطة ٣٤ ثانية أفضل
+    ثانيتين فيها ممكن يكونوا بأولها. بتنتمركز النافذة المطلوبة **بمنتصف
+    `best_window`** ثم بتنشدّ داخل حدود الأصل.
+
+    الترتيب مقصود: الاستمرارية أولًا (القطع غير المرئي أثمن من أفضل
+    ثانية)، ثم `best_window`، ثم التوسيط.
     """
     if after is not None and after + required_s <= entry.probe.duration:
         return round(after, 3)
+    bw = entry.analysis.best_window if entry.analysis else None
+    if bw is not None:
+        lo, hi = bw
+        # وسّط المطلوب على منتصف النافذة، ثم شُدّه داخل الأصل
+        start = (lo + hi) / 2 - required_s / 2
+        start = min(max(start, 0.0), max(0.0, entry.probe.duration - required_s))
+        return round(start, 3)
     return round(max(0.0, (entry.probe.duration - required_s) / 2), 3)
 
 
