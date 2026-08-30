@@ -368,3 +368,57 @@ def test_the_cli_refuses_an_unverified_ffmpeg(project, capsys, monkeypatch):
         RuntimeError("ffmpeg 5.0 أقدم من الأدنى المدعوم")))
     assert main(argv(project, project / "out.mp4")) == 1
     assert "FFMPEG" in capsys.readouterr().err
+
+
+# ══════════════════ طبقة الصوت ══════════════════════════════════════
+#
+# **تلات فحوص انولدوا من طفرات مرقت.** الطقم كان أخضر وهو ما بيغطّي
+# ولا وحدة منهن — نفس درس «افحص الحارس بحالة سيّئة معروفة».
+@pytest.mark.ffmpeg
+def test_the_cli_reads_the_channel_count_and_compensates(project, capsys):
+    """`voice.wav` بالـfixture **مونو** (`-ac 1`)، فالتعويض لازم يبيّن.
+
+    الطفرة اللي كشفت الفراغ: تكميم `channels = 2` بالـCLI. مرقت،
+    لأن ولا فحص كان بيوصل لعدد القنوات الحقيقي — والنتيجة كلام
+    ٣dB تحت المعايرة بلا أي عرَض ظاهر.
+    """
+    from ai_pipeline.render import SPEECH_UPMIX_GAIN
+    out = project / "o.mp4"
+    assert main(argv(project, out, "--sfx", "--dry-run")) == 0
+    cmd = capsys.readouterr().out
+    assert f"volume={SPEECH_UPMIX_GAIN:.6f}" in cmd
+    assert "1ch" not in cmd                       # السطر التقريري على stderr
+
+
+@pytest.mark.ffmpeg
+def test_a_stereo_voice_is_not_compensated(project, capsys):
+    """نفس المشروع بصوت ستيريو: **ولا تعويض.** بيمسك الطفرة المعاكسة
+    (تعويض بلا شرط) على مستوى الـCLI مش الراسم بس."""
+    from shared.ffmpeg import exe
+    from ai_pipeline.render import SPEECH_UPMIX_GAIN
+    st = project / "stereo.wav"
+    subprocess.run([exe(), "-v", "error", "-i", str(project / "voice.wav"),
+                    "-af", "pan=stereo|c0=c0|c1=c0", "-c:a", "pcm_s16le",
+                    "-y", str(st)], check=True)
+    out = project / "o.mp4"
+    a = argv(project, out, "--sfx", "--dry-run")
+    a[a.index("--audio") + 1] = str(st)
+    assert main(a) == 0
+    assert f"volume={SPEECH_UPMIX_GAIN:.6f}" not in capsys.readouterr().out
+
+
+@pytest.mark.ffmpeg
+def test_a_bad_music_gain_fails_early_and_classified(project, capsys):
+    """الحارس لازم يضرب **قبل** أي وكيل وأي ترميز، وبنوع خطأ مصنَّف.
+
+    الطفرة اللي مرقت: شيل النداء المبكّر. الحارس الحقيقي بيضل
+    بـ`autoreel.graph` فالخطأ بيطلع — بس كـ`ValueError` عارية بعد
+    ما كل الوكلاء اشتغلوا. الفرق بيبيّن بالسطر التقريري: لو الحارس
+    اشتغل بوقته، ولا مرحلة بعد «ffmpeg» بتنطبع.
+    """
+    out = project / "o.mp4"
+    assert main(argv(project, out, "--music", str(project / "voice.wav"),
+                     "--music-gain", "0.30")) == 1
+    err = capsys.readouterr().err
+    assert "CONTRACT_ERROR" in err and "--music-gain" in err
+    assert "كلمة · صوت" not in err, "الحارس اشتغل متأخّرًا — بعد قراءة المدخلات"

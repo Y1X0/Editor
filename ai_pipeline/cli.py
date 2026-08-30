@@ -32,10 +32,14 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import re
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from shared.audio import music_chain
+from shared.ffmpeg import exe
 from shared.probe import check_ffmpeg, ffmpeg_version
 
 from . import render as R
@@ -46,7 +50,7 @@ from .agents.expand import ThemeView
 from .agents.providers.recorded import RecordedClient
 from .agents.resolver import load_catalog, resolve
 from .agents.runner import AgentHarness, jsonl_sink
-from .errors import NurError
+from .errors import ContractError, NurError
 from .io import contracts as io
 from .models.project import Output, Project, Provenance, Source
 from .qa.output import verify_output
@@ -91,6 +95,31 @@ class Stage:
             print(f"  · {msg}", file=sys.stderr, flush=True)
 
 
+#: تخطيطات القنوات اللي بيسمّيها ffmpeg، ورقمها.
+_LAYOUTS = {"mono": 1, "stereo": 2, "5.1": 6, "5.1(side)": 6, "7.1": 8}
+_ACHAN = re.compile(r"Audio: [^\n]*?, \d+ Hz, ([^,]+),")
+
+
+def speech_channels(path: str | Path) -> int:
+    """عدد قنوات ملف الكلام. **حقيقة عن المصدر، بتنقرا هون مرة.**
+
+    ليش هون ومش بـ`probe_audio`: `validation/` شجرة مجمَّدة، وهاي
+    قراءة جديدة انلزمت لطبقة الصوت لحالها. ونفس قرار `audio_duration`:
+    الـCLI بتقرا الحقائق عن المُدخَل، والراسم بياخدها كوسيط.
+
+    والرقم بيقرّر تعويض الرفع الضمني لستيريو — شوف
+    `render.SPEECH_UPMIX_GAIN`. **بلاه بيصير الكلام ٣dB تحت المعايرة
+    بصمت، وولا تحذير من ffmpeg.**
+
+    بيرجّع ٢ لأي تخطيط مش معروف: التعويض بينطبّق على المونو بس،
+    فالمجهول بياخد المسار اللي ما بيلمس شي.
+    """
+    r = subprocess.run([exe(), "-hide_banner", "-i", str(path)],
+                       capture_output=True, text=True)
+    m = _ACHAN.search(r.stderr)
+    return _LAYOUTS.get(m.group(1).strip(), 2) if m else 2
+
+
 def sha256_of(p: Path) -> str:
     return hashlib.sha256(p.read_bytes()).hexdigest()
 
@@ -131,6 +160,14 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--y-ratio", type=float, default=0.70)
     g.add_argument("--project-id", default="untitled")
 
+    g = ap.add_argument_group("الصوت")
+    g.add_argument("--sfx", action="store_true",
+                   help="مؤثرات عند البداية والقطعات وظهور الكابشن. "
+                        "**مطفية افتراضيًا** — تشغيلها بيضرب الكلام بـ0.70")
+    g.add_argument("--music", type=Path,
+                   help="موسيقى خلفية. بتنلفّ وبتنقصّ لطول الشريط")
+    g.add_argument("--music-gain", type=float, default=0.12)
+
     ap.add_argument("--dry-run", action="store_true",
                     help="بيبني كل شي وبيطبع أمر ffmpeg بلا ترميز")
     ap.add_argument("-q", "--quiet", action="store_true")
@@ -142,8 +179,16 @@ def run(args: argparse.Namespace) -> int:
     work = args.workdir or Path(str(args.out) + ".work")
     work.mkdir(parents=True, exist_ok=True)
 
-    # ── ٠· البيئة ────────────────────────────────────────────────────
+    # ── ٠· البيئة والأعلام ──────────────────────────────────────────
     check_ffmpeg()                      # تحت الأدنى بيرمي، وبينهما بيحذّر
+    # **حارس الهامش بينشتغل هون، قبل أي وكيل وأي ترميز.** واللي
+    # بينادى هو الحارس **نفسه** بـ`autoreel.graph`، مش نسخة عنه:
+    # حسبة تانية للهامش بتفترق بصمت عن الأصلية.
+    if args.music is not None:
+        try:
+            music_chain(0, gain=args.music_gain)
+        except ValueError as e:
+            raise ContractError(f"--music-gain: {e}") from e
     ffv = ".".join(map(str, ffmpeg_version()))
     say(f"ffmpeg {ffv}")
 
@@ -151,7 +196,9 @@ def run(args: argparse.Namespace) -> int:
     script_text = check_script(args.script)
     tokens = tokenize(script_text)
     audio_duration, codec, in_rate = probe_audio(args.audio)
-    say(f"{len(tokens)} كلمة · صوت {audio_duration}s ({codec} @ {in_rate}Hz)")
+    channels = speech_channels(args.audio)
+    say(f"{len(tokens)} كلمة · صوت {audio_duration}s ({codec} @ {in_rate}Hz"
+        f" · {channels}ch)")
 
     output = Output(width=args.width, height=args.height, fps=args.fps,
                     sample_rate=args.sample_rate)
@@ -222,9 +269,17 @@ def run(args: argparse.Namespace) -> int:
 
     # ── ٦· الرسم ─────────────────────────────────────────────────────
     style = R.CaptionStyle(font=args.font, y_ratio=args.y_ratio)
+    audio_cfg = R.Audio(sfx=args.sfx, music=args.music,
+                        music_gain=args.music_gain,
+                        speech_channels=channels)
+    if args.sfx or args.music:
+        say("صوت: " + " · ".join(
+            x for x in ("مؤثرات" if args.sfx else "",
+                        f"موسيقى @{args.music_gain}" if args.music else "") if x))
     cmd = R.render(timeline, segments, assets, typo, output,
                    audio=args.audio, out_path=args.out, workdir=work,
-                   style=style, alignment=alignment, dry_run=args.dry_run)
+                   style=style, alignment=alignment, audio_cfg=audio_cfg,
+                   dry_run=args.dry_run)
     if args.dry_run:
         print(" ".join(cmd))            # stdout — للأنبوب
         say("dry-run: ولا ترميز")

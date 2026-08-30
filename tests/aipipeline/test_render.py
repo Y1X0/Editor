@@ -14,13 +14,15 @@ import subprocess
 import pytest
 
 from ai_pipeline.errors import ContractError, FfmpegError
+from shared.ffmpeg import exe
 from ai_pipeline.models.assets import Asset, AssetsContract, Probe
 from ai_pipeline.models.timeline import Span, Timeline
 from ai_pipeline.models.typography import (
     StyleOverride, TypographyContract, TypographySegment,
 )
 from ai_pipeline.render import (
-    MOTION, CaptionStyle, Encode, build_command, render,
+    MOTION, SPEECH_UPMIX_GAIN, Audio, CaptionStyle, Encode, build_command,
+    render,
 )
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -608,3 +610,195 @@ def test_rendering_twice_into_one_workdir_succeeds(one_span, segments, typo,
         rasterise_captions(one_span, segments, typo, output,
                            CaptionStyle(font=FONT), d)
     assert len(list((d / "seq").glob("*.png"))) == one_span.total_frames
+
+
+# ── طبقة الصوت: مؤثرات وموسيقى ───────────────────────────────────────
+#
+# **هالقسم انولد من خلل مرق:** الوصل الأول كان `chains.append(...)`
+# و`sfx_chain`/`music_chain` بيرجّعوا **قائمة أجزاء** مش نصًّا واحدًا،
+# فالأمر انفجر بـ`TypeError` عند أول تشغيلة حقيقية. الطقم كان أخضر
+# (٦٦ ناجحة) لأن **ولا فحص شغّل المسار** — العلَم مطفي افتراضيًا،
+# فالسلسلة الجديدة ما انبنت ولا مرة.
+#
+# لهيك أول فحص هون بيتأكد إن الرسم **نص صالح**، لا بس إن الحقول وصلت.
+def test_the_audio_flags_produce_a_well_formed_graph(timeline, rassets,
+                                                     output, tmp_path):
+    """الرسم لازم يكون نصًّا واحدًا، وكل سلسلة فيه جزءًا مستقلًا.
+
+    الحارس على `TypeError` اللي مرق من الطقم الأخضر: `";".join` بترمي
+    على أي عنصر مش نصًّا، فبناء الأمر لحاله بيمسك الخلل.
+    """
+    music = tmp_path / "m.wav"
+    music.write_bytes(b"\0")
+    cmd = cmd_of(timeline, rassets, output,
+                 audio_cfg=Audio(sfx=True, music=music))
+    g = graph_of(cmd)
+    assert isinstance(g, str)
+    assert all(isinstance(x, str) for x in cmd)
+    # ولا سلسلة فاضية، وكل وحدة بتنتهي بوصلة مسمّاة
+    for part in g.split(";"):
+        assert part.strip(), "سلسلة فاضية بالرسم"
+    assert g.count("[aout]") == 1, "لازم مخرَج صوت واحد بالضبط"
+
+
+def test_sfx_off_means_the_speech_goes_straight_to_aout(timeline, rassets,
+                                                        output):
+    """**الافتراضي ما بيلمس الصوت** — نفس قرار المحرر.
+
+    بلا هالفحص، تشغيل الطبقة افتراضيًا بيغيّر صوت كل مخرَج موجود
+    وما بينكشف.
+    """
+    g = graph_of(cmd_of(timeline, rassets, output))
+    assert "amix" not in g and "adelay" not in g
+    assert "[aout]" in g
+
+
+def test_sfx_adds_inputs_and_places_them_by_sample_index(timeline, rassets,
+                                                         output):
+    """كل مؤثر بيوصل بـ`adelay=<عيّنة>S` — الفهرس هو الزمن.
+
+    و`all=1` و`aformat` **قبل** `adelay`: فخّان صامتان موثّقان
+    (ستيريو بلا `all=1` بيقع عند العيّنة ٠، و44.1k بلا `aformat`
+    بيقع بعد ٨٨ms).
+    """
+    g = graph_of(cmd_of(timeline, rassets, output, audio_cfg=Audio(sfx=True)))
+    assert "adelay=0S:all=1" in g, "مؤثر البداية عند العيّنة ٠"
+    assert "S:all=1" in g and "adelay" in g
+    for part in g.split(";"):
+        if "adelay" in part:
+            assert "all=1" in part
+    assert "normalize=0" in g, "`normalize=0` إلزامية بـ`amix`"
+    assert "alimiter" not in g, "بيأخّر التيار ٢٣٩ عيّنة"
+
+
+def test_music_loops_and_is_length_pinned(timeline, rassets, output,
+                                          tmp_path):
+    """`-stream_loop -1` للّف، و`atrim=end_sample` لتثبيت الطول.
+
+    الطول **قرارنا مش قرار `amix`** — نفس الحادثة اللي كسرت ٤ فحوص
+    على ffmpeg 6.1.1.
+    """
+    music = tmp_path / "bed.wav"
+    music.write_bytes(b"\0")
+    cmd = cmd_of(timeline, rassets, output, audio_cfg=Audio(music=music))
+    assert "-stream_loop" in cmd and cmd[cmd.index("-stream_loop") + 1] == "-1"
+    assert cmd[cmd.index("-stream_loop") + 2] == "-i"
+    assert cmd[cmd.index("-stream_loop") + 3] == str(music)
+    g = graph_of(cmd)
+    assert f"atrim=end_sample={timeline.total_samples}" in g
+
+
+def test_music_gain_reaches_the_command(timeline, rassets, output, tmp_path):
+    """مفتاح ما بيغيّر المخرَج = ميت أو مفصول. نفس قاعدة
+    `test_config_wiring` بالمحرر."""
+    music = tmp_path / "bed.wav"
+    music.write_bytes(b"\0")
+    a = graph_of(cmd_of(timeline, rassets, output,
+                        audio_cfg=Audio(music=music, music_gain=0.12)))
+    b = graph_of(cmd_of(timeline, rassets, output,
+                        audio_cfg=Audio(music=music, music_gain=0.14)))
+    assert a != b
+    assert "volume=0.1200" in a and "volume=0.1400" in b
+
+
+def test_the_headroom_guard_fires_before_any_encode(timeline, rassets, output,
+                                                    tmp_path):
+    """`speech_gain + gain ≥ 1.0` بيرمي — **بلا قصّ صامت.**
+
+    الهامش محسوب مش مقيسًا: ٠.٨٥ + ٠.١٢ = ٠.٩٧ < ١.٠. الحارس
+    بـ`autoreel.graph`، وهون بنتأكد إنه بينوصل من هالمسار كمان.
+    """
+    music = tmp_path / "bed.wav"
+    music.write_bytes(b"\0")
+    with pytest.raises(ValueError, match="هامش الصوت"):
+        cmd_of(timeline, rassets, output,
+               audio_cfg=Audio(music=music, music_gain=0.30))
+
+
+def test_sfx_and_music_chain_in_order(timeline, rassets, output, tmp_path):
+    """كلام ──► مؤثرات ──► موسيقى. الترتيب مش تجميليًا: كسب الموسيقى
+    بينطبّق على **الناقل كاملًا** بما فيه المؤثرات، فالهامش المحسوب
+    (٠.٩٠٦) بيضل صحيحًا."""
+    music = tmp_path / "bed.wav"
+    music.write_bytes(b"\0")
+    g = graph_of(cmd_of(timeline, rassets, output,
+                        audio_cfg=Audio(sfx=True, music=music)))
+    assert g.index("[aspeech]") < g.index("[asfx]") < g.index("[aout]")
+
+
+# ── تعويض الرفع الضمني من أحادي لستيريو ──────────────────────────────
+def test_mono_speech_is_compensated_before_the_mix(timeline, rassets, output):
+    """**الخلل الصامت اللي انمسك بالقياس مش بالفحص.**
+
+    ffmpeg بيرفع المونو لستيريو بـ−3dB، وأصول المؤثرات ستيريو أصلًا
+    فبتمرق بلا مساس — يعني المؤثرات بتقعد ٣dB أعلى فوق الكلام من
+    المعايرة، وولا تحذير.
+    """
+    mono = graph_of(cmd_of(timeline, rassets, output,
+                           audio_cfg=Audio(sfx=True, speech_channels=1)))
+    stereo = graph_of(cmd_of(timeline, rassets, output,
+                             audio_cfg=Audio(sfx=True, speech_channels=2)))
+    assert f"volume={SPEECH_UPMIX_GAIN:.6f}" in mono
+    assert f"volume={SPEECH_UPMIX_GAIN:.6f}" not in stereo
+
+
+def test_no_compensation_without_a_mix(timeline, rassets, output):
+    """بلا مؤثرات ولا موسيقى ما في `amix`، فما في رفع، فما في تعويض.
+
+    تعويض بلا سببه بيرفع الكلام ٣dB **فوق** المصدر — أسوأ من الخلل
+    اللي بيصلّحه.
+    """
+    g = graph_of(cmd_of(timeline, rassets, output,
+                        audio_cfg=Audio(speech_channels=1)))
+    assert f"volume={SPEECH_UPMIX_GAIN:.6f}" not in g
+
+
+@pytest.mark.slow
+def test_ffmpeg_still_upmixes_mono_at_minus_3db():
+    """**الحارس على الفرضية، مش على الحالة.**
+
+    `SPEECH_UPMIX_GAIN` رقم مقيس على ffmpeg 7.0 لا مأثور. لو نسخة
+    جاية غيّرت قاعدة الرفع، التعويض بينقلب لخلل — فالفحص بيقيس
+    السلوك نفسه بدل ما يصدّق الثابت.
+    """
+    import wave
+    import tempfile
+    import numpy as np
+    with tempfile.TemporaryDirectory() as d:
+        src, dst = f"{d}/m.wav", f"{d}/s.wav"
+        n, peak = 4800, 0.5
+        x = (peak * np.sin(2 * np.pi * 1000 * np.arange(n) / 48000)
+             * 32767).astype("<i2")
+        with wave.open(src, "wb") as w:
+            w.setnchannels(1), w.setsampwidth(2), w.setframerate(48000)
+            w.writeframes(x.tobytes())
+        subprocess.run([exe(), "-v", "error", "-i", src, "-af",
+                        "aformat=channel_layouts=stereo", "-c:a",
+                        "pcm_s16le", "-y", dst], check=True)
+        with wave.open(dst) as w:
+            assert w.getnchannels() == 2
+            a = np.frombuffer(w.readframes(w.getnframes()), "<i2")
+        got = np.abs(a).max() / 32767
+        # المقيس: ٠.١٢٥ -> ٠.٠٨٨٤ = ١/√٢
+        assert abs(got * SPEECH_UPMIX_GAIN - peak) < 0.01, (
+            f"ffmpeg رفع المونو بمعامل {peak / got:.4f} لا "
+            f"{SPEECH_UPMIX_GAIN:.4f} — `SPEECH_UPMIX_GAIN` لازم "
+            f"تنقاس من جديد")
+
+
+def test_the_sfx_chain_pins_its_length_too(timeline, rassets, output):
+    """**الطول قرارنا مش قرار `amix`** — على المؤثرات كمان، لا الموسيقى بس.
+
+    الطفرة اللي مرقت: `total_samples=None` على `sfx_chain`. الفحص
+    القديم كان بيتأكد من التثبيت على مسار الموسيقى فقط، فمسار
+    المؤثرات لحاله ضل مكشوفًا — وهو بالضبط اللي كسر ٤ فحوص على
+    ffmpeg 6.1.1 (‎−١٢٨٠ عيّنة، ٢٦.٧ms، بصمت).
+    """
+    n = timeline.total_samples
+    for cfg in (Audio(sfx=True), Audio(sfx=True, speech_channels=1)):
+        g = graph_of(cmd_of(timeline, rassets, output, audio_cfg=cfg))
+        mix = [p for p in g.split(";") if "amix" in p]
+        assert mix, "ولا `amix` بالرسم"
+        for part in mix:
+            assert f"apad,atrim=end_sample={n}" in part, (
+                f"مزيج بلا تثبيت طول: {part}")

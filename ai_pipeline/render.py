@@ -33,6 +33,9 @@ from pathlib import Path
 
 from PIL import Image, ImageChops, ImageFilter
 
+from shared.audio import (
+    asset_usage, music_chain, plan_cues, sfx_asset, sfx_chain,
+)
 from shared.captions import render_caption
 from shared.ffmpeg import exe
 from shared.frames import caption_sequence
@@ -94,6 +97,48 @@ class CaptionStyle:
     scale_from: float = 0.86
     #: تلوين الكلمة المنطوقة. بيحتاج `alignment` — بلاها بينطفي لحاله.
     karaoke: bool = True
+
+
+@dataclass(frozen=True)
+class Audio:
+    """طبقة الصوت فوق الكلام. **مطفية افتراضيًا، بنفس قرار المحرر.**
+
+    تشغيلها بيضرب الكلام بـ0.70 وبيضيف أصواتًا — يعني بيغيّر صوت كل
+    مخرَج موجود. فالتشغيل قرار معلَن لا افتراضي.
+
+    القيم مقيسة لا مختارة (`SFX-SPEC.md`): الهامش
+    0.70 + 0.90 × 0.25 = **0.925 < 1.0**، فولا عيّنة مقصوصة.
+    """
+
+    #: مؤثرات عند الأحداث: بداية · قطع · تغيّر زوم · ظهور كابشن · ختام.
+    sfx: bool = False
+    #: مسار موسيقى خلفية، أو `None`. بتنلفّ وبتنقصّ لطول الشريط.
+    music: Path | None = None
+    #: كسب الموسيقى، وكسب الكلام تحتها.
+    music_gain: float = 0.12
+    music_speech_gain: float = 0.85
+    #: **عدد قنوات الكلام — حقيقة عن المصدر، بتوصل كمُدخَل.**
+    #: نفس قرار `audio_duration`: الـCLI بتقراها، والراسم ما بيقيسها.
+    #: وليش بتلزم أصلًا: شوف `SPEECH_UPMIX_GAIN`.
+    speech_channels: int = 2
+
+
+#: **تعويض الرفع الضمني من أحادي لستيريو.** ffmpeg بيرفع المونو
+#: لستيريو بمعامل حفظ قدرة **−3dB** (٠.٧٠٧١ لكل قناة)، بلا أي تحذير.
+#:
+#: وأصول المؤثرات ستيريو أصلًا فبتمرق بلا مساس — يعني المؤثرات بتقعد
+#: **٣dB أعلى فوق الكلام** من المعايرة (٠.٢٢ مقابل ٠.٤٢٠٧ بدل ٠.٥٩٥).
+#: نفس شكل حادثة SAR: حقيقة عن المصدر بتدخل السلسلة بلا تطبيع،
+#: وffmpeg بيعوّض بصمت.
+#:
+#: **مقيس على ffmpeg 7.0**: مونو ذروته ٠.١٢٥ بتطلع ٠.٠٨٨٤ من
+#: `aformat=channel_layouts=stereo` — ٠.١٢٥/٠.٠٨٨٤ = ١.٤١٤٠.
+#:
+#: وليش مش `pan=stereo|c0=c0|c1=c0` اللي بتعطي الوحدة مباشرة: مقيسة
+#: كمان — بتعطي الوحدة على المونو، **وبتدهس القناة اليمنى** على
+#: مصدر ستيريو حقيقي (L=400Hz R=1200Hz طلعوا 400/400). فالتعويض
+#: مشروط بعدد القنوات، لا فلتر واحد للحالتين.
+SPEECH_UPMIX_GAIN = 2 ** 0.5
 
 
 @dataclass(frozen=True)
@@ -328,7 +373,8 @@ def video_chain(k: int, span, asset, output: Output, fps: int) -> str:
 def build_command(
     timeline: Timeline, assets: AssetsContract, output: Output,
     audio: str | Path, caption_pattern: str, out_path: str | Path, *,
-    y_ratio: float, encode: Encode = Encode(),
+    y_ratio: float, audio_cfg: Audio = Audio(),
+    encode: Encode = Encode(),
 ) -> list[str]:
     """أمر ffmpeg كامل. **نقية: ولا قراءة قرص ولا تشغيل.**
 
@@ -362,14 +408,58 @@ def build_command(
     cmd += ["-framerate", str(fps), "-start_number", "0", "-i", caption_pattern]
     cmd += ["-i", str(audio)]
 
+    # ── الصوت: كلام ──► مؤثرات ──► موسيقى ────────────────────────────
+    # الترتيب مقصود: المؤثرات بتنمزج على الكلام المقصوص، والموسيقى
+    # بتنمزج على الاتنين. عكسه بيخلّي الموسيقى تنضرب بكسب المؤثرات.
+    idx = n + 2
+    cues, sfx_inputs = [], {}
+    if audio_cfg.sfx:
+        cues = plan_cues(
+            [sp.n_frames for sp in spans], fps,
+            zooms=[MOTION[assets.by_segment(sp.segment_id).motion][0]
+                   for sp in spans],
+            caption_frames=[t.f_start for t in timeline.text_spans])
+        for name in sorted(asset_usage(cues)):
+            sfx_inputs[name] = idx
+            cmd += ["-i", sfx_asset(name)]
+            idx += 1
+    music_idx = None
+    if audio_cfg.music is not None:
+        music_idx = idx
+        # `-stream_loop -1` عشان موسيقى أقصر من الشريط تتكرّر بدل ما
+        # تسكت؛ الطول بينثبّت بـ`atrim` جوّا `music_chain`.
+        cmd += ["-stream_loop", "-1", "-i", str(audio_cfg.music)]
+        idx += 1
+
     chains.append("".join(labels) + f"concat=n={n}:v=1:a=0[vcat]")
     chains.append(f"[vcat][{n}:v]overlay=x=(W-w)/2:"
                   f"y=(H*{y_ratio})-h/2:eof_action=pass[vout]")
     # **الطول مثبَّت بالبناء، مش متروكًا لـ`-shortest`.** حادثة موثَّقة
     # بهالمستودع: `amix=duration=first` بتحسب الطول غير بين ffmpeg 6.x
     # و7.x (فرق ١٢٨٠ عيّنة). `apad,atrim=end_sample=N` بتشيل الفرق أصلًا.
-    chains.append(f"[{n + 1}:a]aresample={timeline.sample_rate},apad,"
-                  f"atrim=end_sample={timeline.total_samples}[aout]")
+    total = timeline.total_samples
+    label = "aout"
+    if cues or music_idx is not None:
+        label = "aspeech"
+    speech = (f"[{n + 1}:a]aresample={timeline.sample_rate},apad,"
+              f"atrim=end_sample={total}")
+    if (cues or music_idx is not None) and audio_cfg.speech_channels == 1:
+        speech += f",volume={SPEECH_UPMIX_GAIN:.6f}"
+    chains.append(f"{speech}[{label}]")
+    if cues:
+        nxt = "asfx" if music_idx is not None else "aout"
+        # **`+=` لا `append`** — التلاتة بيرجّعوا قائمة أجزاء، وكل
+        # جزء سلسلة مستقلة بالرسم.
+        chains += sfx_chain(cues, sfx_inputs, in_label=label,
+                            out_label=nxt, sr=timeline.sample_rate,
+                            total_samples=total)
+        label = nxt
+    if music_idx is not None:
+        chains += music_chain(music_idx, in_label=label, out_label="aout",
+                              total_samples=total,
+                              gain=audio_cfg.music_gain,
+                              speech_gain=audio_cfg.music_speech_gain,
+                              sr=timeline.sample_rate)
 
     cmd += ["-filter_complex", ";".join(chains),
             "-map", "[vout]", "-map", "[aout]",
@@ -389,7 +479,8 @@ def render(
     typo: TypographyContract, output: Output, *,
     audio: str | Path, out_path: str | Path, workdir: str | Path,
     style: CaptionStyle, alignment: Alignment | None = None,
-    encode: Encode = Encode(), dry_run: bool = False,
+    audio_cfg: Audio = Audio(), encode: Encode = Encode(),
+    dry_run: bool = False,
 ) -> list[str]:
     """بيرسم ويرجّع الأمر اللي انشغّل (أو اللي **كان** بينشغّل).
 
@@ -402,7 +493,8 @@ def render(
     # والoverlay بيوسّط الصندوق عند هالارتفاع، فالقيمتان لازم تكونا
     # نفسها. تمريرها بيخلّي `build_command` نقيّة وقابلة لإعادة الدخول.
     cmd = build_command(timeline, assets, output, audio, pattern, out_path,
-                        y_ratio=style.y_ratio, encode=encode)
+                        y_ratio=style.y_ratio, audio_cfg=audio_cfg,
+                        encode=encode)
     if dry_run:
         return cmd
 
