@@ -37,6 +37,16 @@ _V = re.compile(r"Video: .*?, (\d+)x(\d+)")
 _F = re.compile(r",\s*([\d.]+) fps")
 _D = re.compile(r"Duration: (\d+):(\d+):(\d+\.\d+)")
 
+#: **تدريج لوني موحَّد على كل أصل.** مكتبة مجمَّعة من مصادر مختلفة
+#: بتيجي بحرارات لون متنافرة — بنفسجي نيون جنب ضوء نهار جنب برتقالي —
+#: والفيديو بيبيّن مجموعة صور لا قطعة وحدة. التدريج بيسحب الظلال
+#: للأزرق والإضاءات للدفء ويوحّد التشبّع، فالمشاهد المختلفة بتصير
+#: بلغة بصرية وحدة.
+#:
+#: مخبوز بالأصل مثل التدرّج الأسفل: صفر كلفة وقت الرندر.
+GRADE = ("colorbalance=rs=-0.06:bs=0.10:rm=0.02:bm=-0.02:rh=0.06:bh=-0.06,"
+         "eq=contrast=1.12:saturation=0.92:brightness=-0.03")
+
 #: مفردات العقد المغلقة — أي قيمة برّاها بيرفضها `CatalogEntry`.
 SHOTS = ("wide", "medium", "macro", "aerial", "abstract")
 PALETTES = ("charcoal", "deep_blue", "warm_gold", "monochrome")
@@ -54,8 +64,8 @@ def probe(p: Path) -> dict:
             "duration": int(h) * 3600 + int(m) * 60 + float(s)}
 
 
-def bottom_scrim(w: int, h: int, dst: Path, start: float = 0.52,
-                 peak: int = 190) -> Path:
+def bottom_scrim(w: int, h: int, dst: Path, start: float = 0.38,
+                 peak: int = 215) -> Path:
     """تدرّج داكن بأسفل الإطار — **حتى يُقرأ الكابشن على أي لقطة**.
 
     الهالة حوالين الحروف بتكفّي على خلفية هادئة وبتفشل على صورة
@@ -84,10 +94,13 @@ def animate(src: Path, dst: Path, seconds: float, fps: int, size: str) -> None:
     المقطع بقرار موثَّق («الزوم ثابت داخل المقطع مش zoompan متحرك»).
     فالزحف المستمر مكانه هون، والقاعدة هناك تضل كما هي.
 
-    **وتعبئة مموّهة بدل القصّ**، لأن مصدر الصور المولَّدة غالبًا مربّع
-    أو 3:4: القصّ لـ9:16 بياكل نصّ الصورة وبيشيل موضوعها. النسخة
-    المموّهة بتملا الإطار والنسخة الحادّة بتقعد فوقها كاملة —
-    فولا بكسل من الموضوع بيضيع.
+    **ملء الإطار بالقصّ، لا تعبئة مموّهة.** جرّبنا الاتنين على نفس
+    الإطار: المموّهة بتحفظ الصورة كاملة بس بتترك شريطين ضبابيين فوق
+    وتحت، والنتيجة بتبيّن رخيصة — «صورة مركونة بإطار» لا لقطة. الملء
+    بيقصّ من الجوانب وبيعطي لقطة حقيقية.
+
+    والثمن معلَن: صورة مربّعة 736px بتنكبّر ٢.٤× فبتصير أنعم. على
+    شاشة موبايل الليونة أقل ظهورًا بكتير من الشريطين.
     """
     w, h = (int(x) for x in size.split("x"))
     bw, bh = w * 3 // 2, h * 3 // 2          # غرفة للزحف
@@ -96,9 +109,7 @@ def animate(src: Path, dst: Path, seconds: float, fps: int, size: str) -> None:
     bottom_scrim(w, h, scrim)
     chain = (
         f"[0:v]scale={bw}:{bh}:force_original_aspect_ratio=increase,"
-        f"crop={bw}:{bh},gblur=sigma=42,eq=brightness=-0.16:saturation=0.85[bg];"
-        f"[0:v]scale={bw}:{bh}:force_original_aspect_ratio=decrease[fg];"
-        f"[bg][fg]overlay=(W-w)/2:(H-h)/2,"
+        f"crop={bw}:{bh},{GRADE},"
         f"zoompan=z='1.00+0.09*on/{n}':"
         f"x='iw/2-(iw/zoom/2)+(on-{n // 2})*0.08':"
         f"y='ih/2-(ih/zoom/2)':d={n}:s={w}x{h}:fps={fps}[kb];"

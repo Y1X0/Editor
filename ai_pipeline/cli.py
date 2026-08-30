@@ -70,7 +70,7 @@ ROOT = Path(__file__).resolve().parent.parent
 #: عمليًا بين نصّ وآخر (Amiri للنص العام، AmiriQuran للقرآني).
 THEMES = {
     "nur-dark": dict(
-        font_role="body", base_font_size=84, size_step_px=4,
+        font_role="body", base_font_size=66, size_step_px=3,
         # **تباين قبل ذوق.** الأدوار التلاتة كلها فاتحة بقصد: خلفيات
         # الـtheme داكنة، ولون قريب منها (ذهبي على ذهبي) بيضيع مهما
         # كانت الهالة. الذهبي محجوز لإبراز الكلمة المنطوقة وحده.
@@ -127,8 +127,8 @@ def build_parser() -> argparse.ArgumentParser:
     g = ap.add_argument_group("الأسلوب")
     g.add_argument("--theme", default="nur-dark", choices=sorted(THEMES))
     g.add_argument("--font", type=Path,
-                   default=ROOT / "fonts" / "Amiri-Bold.ttf")
-    g.add_argument("--y-ratio", type=float, default=0.74)
+                   default=ROOT / "fonts" / "Tajawal-ExtraBold.ttf")
+    g.add_argument("--y-ratio", type=float, default=0.70)
     g.add_argument("--project-id", default="untitled")
 
     ap.add_argument("--dry-run", action="store_true",
