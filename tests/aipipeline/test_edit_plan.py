@@ -171,6 +171,19 @@ def test_a_plan_that_misses_a_segment_is_rejected(segments):
         check_plan_covers(p, segments)
 
 
+def test_the_compiler_actually_calls_the_coverage_check(
+        output, segments, alignment, assets):
+    """**الفحص على المسار لا على الدالة.**
+
+    الفحصان فوق بينادوا `check_plan_covers` مباشرة، فطفرة بتشيل النداء
+    من `compile_plan` كانت **بتمرق**. الفرق: هون بنمرّ من الباب اللي
+    بيمرّ منه المنتج.
+    """
+    p = EditPlan(beats=(beat(1, (1, 2)),), shots=(shot(1, 1),))
+    with pytest.raises(TimelineError, match="ما بتغطّي المقاطع"):
+        compile_plan(p, output, segments, alignment, assets, 6.4)
+
+
 def test_a_plan_referencing_an_unknown_segment_is_rejected(segments):
     """الاتجاه الثاني — بلاه اللقطة المعلّقة بتمرق."""
     p = EditPlan(beats=(beat(1, (1, 2, 3, 99)),), shots=(shot(1, 1),))
@@ -300,3 +313,148 @@ def test_the_upper_clamp_leaves_room_for_the_last_shots(segments, alignment):
     for k, b in enumerate(cuts[1:-1]):
         remaining = len(cuts) - k - 3
         assert cuts[-1] - b >= remaining, f"اللقطة {k} أكلت مدى الباقيات: {cuts}"
+
+
+# ══════════ Phase 3 · اللقطة ≠ المقطع النصّي ═══════════════════════
+#
+# قبل هالمرحلة كان `quantize` بيكتب:
+#
+#     cuts = [0] + [s.f_start for s in text[1:]] + [total_frames]
+#
+# وهاد بيخلق **تقابلًا واحد-لواحد** بين مدى النص ومدى الصورة: عدد
+# اللقطات = عدد المقاطع، دائمًا، وولا وكيل بيقدر يتجاوزه.
+def test_three_shots_can_live_inside_one_segment(
+        output, segments, alignment, assets):
+    """**اللي كان مستحيلًا:** جملة واحدة بتلات لقطات."""
+    p = EditPlan(
+        beats=(beat(1, (1,)), beat(2, (2,)), beat(3, (3,))),
+        shots=(shot(1, 1, 0), shot(2, 1, 1), shot(3, 1, 2),
+               shot(4, 2, 0), shot(5, 3, 0)))
+    tl = compile_plan(p, output, segments, alignment, assets, 6.4)
+    assert len(tl.visual_spans) == 5
+    assert len(tl.text_spans) == 3
+    # تلات لقطات متتالية كلها على أصل المقطع الأول
+    assert [s.segment_id for s in tl.visual_spans[:3]] == [1, 1, 1]
+
+
+def test_one_shot_can_span_several_segments(
+        output, segments, alignment, assets):
+    """**اللي كان مستحيلًا كمان:** لقطة وحدة بتحمل تلات جمل."""
+    p = EditPlan(beats=(beat(1, (1, 2, 3)),), shots=(shot(1, 1, 0),))
+    tl = compile_plan(p, output, segments, alignment, assets, 6.4)
+    assert len(tl.visual_spans) == 1
+    assert len(tl.text_spans) == 3
+    assert tl.visual_spans[0].f_start == 0
+    assert tl.visual_spans[0].f_end == tl.total_frames
+
+
+def test_the_visual_track_still_covers_the_whole_strip(
+        output, segments, alignment, assets):
+    """مهما تغيّر عدد اللقطات: **بلا فجوة ولا تداخل**، من صفر للنهاية."""
+    for p in (trivial_plan(segments),
+              EditPlan(beats=(beat(1, (1, 2, 3)),),
+                       shots=tuple(shot(i + 1, 1, i) for i in range(7)))):
+        tl = compile_plan(p, output, segments, alignment, assets, 6.4)
+        assert tl.visual_spans[0].f_start == 0
+        assert tl.visual_spans[-1].f_end == tl.total_frames
+        for a, b in zip(tl.visual_spans, tl.visual_spans[1:]):
+            assert b.f_start == a.f_end
+
+
+def test_the_trivial_plan_still_takes_the_historical_path(
+        output, segments, alignment, assets):
+    """**بوابة الترحيل بعد فتح `quantize`.**
+
+    الخطة التافهة لازم تضل تعطي نفس البايتات — وإلا فتح `quantize`
+    كسر اللي كان شغّالًا.
+    """
+    old = quantize(output, segments, alignment, assets, 6.4)
+    new = compile_plan(trivial_plan(segments), output, segments, alignment,
+                       assets, 6.4)
+    assert new.model_dump_json() == old.model_dump_json()
+
+
+def test_quantize_with_no_shots_equals_quantize_with_the_derived_shots(
+        output, segments, alignment, assets):
+    """الحالة القديمة **مش فرعًا خاصًّا** — تمريرها صراحةً بتعطي نفسها.
+
+    بلا هالفحص ممكن يكون الفرعان اتفقوا بالصدفة على الـfixture.
+    """
+    auto = quantize(output, segments, alignment, assets, 6.4)
+    explicit = quantize(output, segments, alignment, assets, 6.4,
+                        shots=[(s.segment_id, s.f_end) for s in auto.visual_spans])
+    assert explicit.model_dump_json() == auto.model_dump_json()
+
+
+def test_a_shot_pointing_at_an_unknown_segment_fails(
+        output, segments, alignment, assets):
+    from ai_pipeline.timeline.quantize import quantize as q
+    with pytest.raises(TimelineError, match="مقاطع مش موجودة"):
+        q(output, segments, alignment, assets, 6.4, shots=[(99, 192)])
+
+
+def test_shots_must_cover_the_strip_to_the_end(
+        output, segments, alignment, assets):
+    """آخر لقطة لازم تنتهي عند `total_frames` — وإلا صورة ناقصة بصمت."""
+    from ai_pipeline.timeline.quantize import quantize as q
+    with pytest.raises(TimelineError, match="لازم تنتهي عند"):
+        q(output, segments, alignment, assets, 6.4, shots=[(1, 100)])
+
+
+def test_consecutive_shots_on_one_asset_need_the_summed_duration(
+        output, segments, alignment, tmp_path):
+    """**الكفاية على المجموع لا على الأطول.**
+
+    لقطتان متتاليتان على نفس الأصل بتكمّلا نفس النافذة. لو قِسنا
+    الكفاية على أطول لقطة وحدها، أصل أقصر من مجموعهما بيمرق —
+    والنتيجة قفزة داخل الملف، وهي بالضبط الخلل اللي صلّحه 2772dea.
+    """
+    # المقطع الأول مداه 72 إطارًا (2.40s عند 30fps). أصل 2.0s = 60 إطارًا
+    # **يكفي لقطة وحدة من 36** ولا يكفي مجموع لقطتين. فقياس الكفاية
+    # على الأطول بيمرّق الأصل، وعلى المجموع بيرفضه — والفرق بينهما هو
+    # بالضبط القفزة داخل الملف اللي صلّحها 2772dea.
+    def cat(first_dur):
+        """**الأصل القصير للمقطع الأول وحده.**
+
+        أول كتابة خلّت التلاتة قصيرة، فالفحص كان يرمي بسبب المقطع
+        الثاني — ومرق مع الطفرة لأنه ما كان يقيس اللي يدّعي قياسه.
+        """
+        return AssetsContract(assets=tuple(
+            Asset(segment_id=i, source_type="local", provider="p",
+                  provider_ref=f"r{i}", file_path=tmp_path / f"{i}.mp4",
+                  sha256="c" * 64, license="CC0",
+                  probe=Probe(width=1920, height=1080, fps=30.0,
+                              duration=first_dur if i == 1 else 20.0),
+                  in_point=0.0) for i in (1, 2, 3)))
+
+    one = EditPlan(beats=(beat(1, (1,)), beat(2, (2,)), beat(3, (3,))),
+                   shots=(shot(1, 1, 0), shot(2, 2, 0), shot(3, 3, 0)))
+    two = EditPlan(beats=(beat(1, (1,)), beat(2, (2,)), beat(3, (3,))),
+                   shots=(shot(1, 1, 0), shot(2, 1, 1),
+                          shot(3, 2, 0), shot(4, 3, 0)))
+    #  مدى الـbeat الأول 72 إطارًا. بلقطتين بينقسم 36 + 36.
+    #  أصل 1.5s = 45 إطارًا **بين الاتنين**: أطول لقطة 36 ≤ 45 < المجموع 72.
+    #  فالقياس على الأطول بيمرّقه، وعلى المجموع بيرفضه — وهون بالضبط
+    #  بتنكشف الطفرة.
+    compile_plan(one, output, segments, alignment, cat(3.0), 6.4)   # بيمرق
+    with pytest.raises(Exception, match="إطار من"):
+        compile_plan(two, output, segments, alignment, cat(1.5), 6.4)
+
+
+def test_every_caption_still_sits_inside_a_shot(
+        output, segments, alignment, assets):
+    """**الضمان اللي حلّ محلّ شرط المعرّف** — وأقوى منه.
+
+    الشرط القديم كان يقيس هوية: كل مقطع نصّي إله span بصري بمعرّفه.
+    الجديد يقيس **تغطية**: كل كابشن بيقع فعليًا داخل لقطة، مهما كان
+    عدد اللقطات أو معرّفاتها.
+    """
+    for p in (trivial_plan(segments),
+              EditPlan(beats=(beat(1, (1, 2, 3)),), shots=(shot(1, 1, 0),)),
+              EditPlan(beats=(beat(1, (1,)), beat(2, (2, 3))),
+                       shots=(shot(1, 1, 0), shot(2, 1, 1), shot(3, 2, 0)))):
+        tl = compile_plan(p, output, segments, alignment, assets, 6.4)
+        for t in tl.text_spans:
+            covering = [v for v in tl.visual_spans
+                        if v.f_start <= t.f_start < v.f_end]
+            assert covering, f"كابشن {t.segment_id} بلا لقطة تغطّيه"

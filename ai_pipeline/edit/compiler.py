@@ -116,9 +116,40 @@ def shot_cuts(plan: EditPlan, segments: SegmentsContract,
     return cuts
 
 
+def shot_segments(plan: EditPlan) -> list[int]:
+    """المقطع اللي كل لقطة بتاخد أصلها منه، بترتيب العرض.
+
+    اللقطة **ما بتسمّي أصلًا** — بتقول أي مقطع نصّي تنتمي إليه،
+    والـResolver هو اللي قرّر أصل ذاك المقطع. فهالدالة تحويل مراجع، لا
+    اختيار.
+    """
+    out: list[int] = []
+    for b in sorted(plan.beats, key=lambda x: min(x.segment_ids)):
+        segs = sorted(b.segment_ids)
+        shots = plan.shots_of(b.beat_id)
+        # لقطات الـbeat بتتوزّع على مقاطعه بالتساوي وبالترتيب — الأصل
+        # بيتبدّل عند حدّ المقطع، والباقي بيكمّل على آخر مقطع.
+        for k, _ in enumerate(shots):
+            out.append(segs[min(k * len(segs) // max(len(shots), 1),
+                                len(segs) - 1)])
+    return out
+
+
 def compile_plan(plan: EditPlan, output: Output, segments: SegmentsContract,
                  alignment: Alignment, assets: AssetsContract,
                  audio_duration: float) -> Timeline:
-    """`EditPlan` ──► `Timeline`. **حتمي، وبيمرّ من `quantize` وحدها.**"""
+    """`EditPlan` ──► `Timeline`. **حتمي، وبيمرّ من `quantize` وحدها.**
+
+    **ولا فرع خاص للخطة التافهة.** كتبت واحدًا أول مرة، وطفرة عطّلته
+    فما فشل ولا فحص: المسار الصريح بيعطي **نفس** نتيجة المسار القديم
+    على الخطة التافهة. فالفرع كان يخفي التطابق بدل ما يضمنه — وحذفه
+    بيخلّي البوابة البايتية تفحص المسار الحقيقي لا مسارًا جانبيًا.
+
+    وكذلك حارس «عدم الاتساق الداخلي» انحذف: `shot_cuts` بترجّع
+    `1 + Σ اللقطات` حدًّا و`shot_segments` بترجّع `Σ اللقطات` معرّفًا،
+    فالشرط ما بيقدر يتحقّق. كود ما بينشتغل ما بينفحص.
+    """
     check_plan_covers(plan, segments)
-    return quantize(output, segments, alignment, assets, audio_duration)
+    cuts = shot_cuts(plan, segments, alignment, output, audio_duration)
+    return quantize(output, segments, alignment, assets, audio_duration,
+                    shots=list(zip(shot_segments(plan), cuts[1:])))

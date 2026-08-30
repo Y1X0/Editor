@@ -81,10 +81,20 @@ class Timeline(StrictModel):
                     f"({s.f_end} > {self.total_frames})"
                 )
 
+        # **التغطية زمنية لا بالمعرّف.**
+        #
+        # كان الشرط: كل مقطع نصّي لازم إله span بصري **بمعرّفه**. وهاد
+        # كان بيفرض تقابلًا واحد-لواحد بين النص والصورة — فلقطة وحدة
+        # بتحمل تلات جمل كانت **مستحيلة بالعقد**، لا بالمترجم وحده.
+        #
+        # والضمان المقصود منه هو «ولا كابشن بلا صورة وراه». هاد مكفول
+        # أصلًا وأقوى: الـspans البصرية متلاصقة وبتغطّي `[0, total_frames)`
+        # كاملة (مفحوص فوق)، والنصّية داخل الشريط (مفحوص فوق). فأي
+        # كابشن بيقع حتمًا داخل لقطة.
+        #
+        # الشرط القديم كان **يقيس هوية بدل تغطية** — وهاد بالضبط شكل
+        # القيد اللي منع النظام من أن يصير محررًا.
         vis_ids = {s.segment_id for s in self.visual_spans}
-        missing = sorted({s.segment_id for s in self.text_spans} - vis_ids)
-        if missing:
-            raise ValueError(f"مقاطع نصّية بلا span بصري: {missing}")
         unknown = sorted(set(self.asset_in_frame) - vis_ids)
         if unknown:
             raise ValueError(f"asset_in_frame لمقاطع مش موجودة: {unknown}")
