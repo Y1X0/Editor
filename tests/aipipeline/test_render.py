@@ -442,3 +442,169 @@ def test_dry_run_writes_the_captions_but_encodes_nothing(tiny_contracts,
     seq = tmp_path / "w" / "seq"
     assert len(list(seq.glob("*.png"))) == tl.total_frames
     assert cmd[-1] == str(dst) and "-filter_complex" in cmd
+
+
+# ══════════ الطبقة البصرية: كل قرار لازم يوصل للبكسل ════════════════
+# `animation` ضلّت **حقلًا بالعقد بلا أي أثر** حتى انكشفت بالعين على
+# مخرَج حقيقي — والطقم كان أخضر. ونسخة أولى من الفحوص هون مرقت كمان
+# لأنها كانت بتقارن **مجموعة الملفات**: الحركة بتزيد ملفات حتى لو
+# محتواها متطابق، فالمقارنة كانت بتنجح بلا ما تقيس صورة. القياس الصح
+# على **بكسلات إطار بعينه**.
+
+def _seq(tmp_path, name, timeline, segments, typo, output, style=None, **kw):
+    """بيرسم التسلسل وبيرجّع دالة `frame(n) -> Image` من الملف الفعلي."""
+    from PIL import Image
+
+    from ai_pipeline.render import rasterise_captions
+    d = tmp_path / name
+    rasterise_captions(timeline, segments, typo, output,
+                       style or CaptionStyle(font=FONT), d, **kw)
+    return lambda n: Image.open(d / "seq" / f"{n:06d}.png").convert("RGBA")
+
+
+def _ink(im):
+    """(ألفا الوسطي، مركز الثقل الرأسي، ارتفاع صندوق الحبر).
+
+    **الصندوق بينقاس على عتبة نسبية لأعلى ألفا بالإطار نفسه، مش على
+    قيمة مطلقة.** بلا هيك الشفافية المنخفضة لحالها بتصغّر الصندوق،
+    فيمرق فحص التكبير وهو ما قاس تكبيرًا — طفرة `sc = 1.0` مرقت هيك
+    بالنسخة الأولى.
+    """
+    a = im.split()[3]
+    hi = max(a.getextrema())
+    bbox = a.point(lambda v: 255 if v > hi * 0.25 else 0).getbbox()
+    px = a.load()
+    tot = wy = 0
+    for y in range(im.height):
+        for x in range(0, im.width, 3):
+            v = px[x, y]
+            tot += v
+            wy += v * y
+    return (tot / (im.width * im.height / 3),
+            (wy / tot if tot else 0),
+            (bbox[3] - bbox[1]) if bbox else 0)
+
+
+@pytest.fixture
+def one_span(timeline):
+    return timeline.model_copy(update={
+        "text_spans": (Span(segment_id=1, f_start=10, f_end=70),)})
+
+
+def _typo_with(typo, anim):
+    return TypographyContract(
+        theme=typo.theme, overrides=typo.overrides,
+        segments=tuple(s.model_copy(update={"animation": anim})
+                       for s in typo.segments))
+
+
+@pytest.mark.ffmpeg
+def test_fade_starts_transparent_and_settles_opaque(one_span, segments, typo,
+                                                    output, tmp_path):
+    """`fade` = ألفا بتتصاعد. مقيسة على الإطار، مش على عدد الملفات."""
+    f = _seq(tmp_path, "fade", one_span, segments, _typo_with(typo, "fade"),
+             output)
+    first, mid, steady = _ink(f(10))[0], _ink(f(14))[0], _ink(f(40))[0]
+    assert first < mid < steady, f"ألفا ما تصاعدت: {first:.1f} {mid:.1f} {steady:.1f}"
+    assert first < steady * 0.4
+
+
+@pytest.mark.ffmpeg
+def test_fade_in_up_actually_rises(one_span, segments, typo, output, tmp_path):
+    """`fade_in_up` = النص بيبلّش **أوطى** وبيطلع لمكانه.
+
+    الفحص على مركز الثقل الرأسي: بلا الإزاحة الفحص السابق كان بيمرق
+    لأن الألفا لحالها بتفرّق الصور.
+    """
+    f = _seq(tmp_path, "up", one_span, segments, _typo_with(typo, "fade_in_up"),
+             output, style=CaptionStyle(font=FONT, rise_px=34))
+    assert _ink(f(10))[1] > _ink(f(40))[1] + 8, "ما في ارتفاع فعلي"
+
+
+@pytest.mark.ffmpeg
+def test_fade_in_scale_actually_grows(one_span, segments, typo, output,
+                                      tmp_path):
+    """`fade_in_scale` = صندوق الحبر بيكبر."""
+    f = _seq(tmp_path, "sc", one_span, segments,
+             _typo_with(typo, "fade_in_scale"), output)
+    assert _ink(f(10))[2] < _ink(f(40))[2], "ما في تكبير فعلي"
+
+
+@pytest.mark.ffmpeg
+def test_none_has_no_opening_transition(one_span, segments, typo, output,
+                                        tmp_path):
+    """الضابط السالب: `none` لازم تعطي **نفس الإطار** من أول لحظة."""
+    import os
+    from ai_pipeline.render import rasterise_captions
+    d = tmp_path / "none"
+    rasterise_captions(one_span, segments, _typo_with(typo, "none"), output,
+                       CaptionStyle(font=FONT, karaoke=False), d)
+    tgt = [os.path.realpath(d / "seq" / f"{n:06d}.png") for n in range(10, 70)]
+    assert len(set(tgt)) == 1
+
+
+@pytest.mark.ffmpeg
+def test_the_scrim_darkens_around_the_glyphs(one_span, segments, typo, output,
+                                             tmp_path):
+    """الهالة لازم تزيد **مساحة** التغطية حوالين الحروف.
+
+    بلاها النص بلا خلفية: مقيس بهالمستودع إن التباين على لقطة فاتحة
+    بيطلع 1.06 — غير مرئي عمليًا.
+    """
+    plain = _seq(tmp_path, "s0", one_span, segments,
+                 _typo_with(typo, "none"), output,
+                 style=CaptionStyle(font=FONT, scrim_alpha=0, karaoke=False))
+    lit = _seq(tmp_path, "s1", one_span, segments, _typo_with(typo, "none"),
+               output, style=CaptionStyle(font=FONT, karaoke=False))
+    assert _ink(lit(40))[0] > _ink(plain(40))[0] * 1.5, "الهالة بلا أثر"
+
+
+@pytest.mark.ffmpeg
+def test_karaoke_moves_the_highlight_across_the_words(
+        one_span, segments, typo, output, alignment, tmp_path):
+    """الإبراز لازم **ينتقل**: إطاران بكلمتين مختلفتين مش متطابقين.
+
+    والمقارنة على البكسلات: الطفرة اللي بتثبّت الفهرس على أول كلمة
+    كانت بتضل تولّد نفس عدد الملفات.
+    """
+    from ai_pipeline.render import word_frames
+    marks = word_frames(alignment, one_span, segments)[1]
+    assert len(marks) >= 3, "الـfixture ما فيها كلمات كفاية للفحص"
+    f = _seq(tmp_path, "kara", one_span, segments, _typo_with(typo, "none"),
+             output, alignment=alignment)
+    a, b = f(marks[0][0] + 1), f(marks[2][0] + 1)
+    assert a.tobytes() != b.tobytes(), "الإبراز ما انتقل"
+
+
+@pytest.mark.ffmpeg
+def test_karaoke_word_edges_stay_inside_the_timeline_span(
+        one_span, segments, alignment):
+    """**السلطة على حدود المقطع تضل الـtimeline.**
+
+    `word_frames` بتشتق فهارس الكلمات، بس أول علامة لازم تساوي
+    `f_start` بالضبط وولا وحدة بتتجاوز `f_end` — وإلا صار عندنا تعريف
+    تانٍ لحدّ المقطع بيفترق بصمت عن `quantize`.
+    """
+    from ai_pipeline.render import word_frames
+    marks = word_frames(alignment, one_span, segments)
+    sp = one_span.text_spans[0]
+    got = marks[sp.segment_id]
+    assert got[0][0] == sp.f_start
+    assert all(sp.f_start <= f < sp.f_end for f, _ in got)
+    assert [f for f, _ in got] == sorted({f for f, _ in got})
+
+
+@pytest.mark.ffmpeg
+def test_rendering_twice_into_one_workdir_succeeds(one_span, segments, typo,
+                                                   output, tmp_path):
+    """تشغيلة تانية على نفس المجلّد — الوصلة القديمة كانت بتفجّرها.
+
+    `SameFileError`: `symlink` بترمي لأن الهدف موجود، والسقوط للنسخ
+    بيصير نسخ ملف على نفسه. انكشف بفحص أعاد الاستدعاء بنفس المسار.
+    """
+    from ai_pipeline.render import rasterise_captions
+    d = tmp_path / "twice"
+    for _ in range(2):
+        rasterise_captions(one_span, segments, typo, output,
+                           CaptionStyle(font=FONT), d)
+    assert len(list((d / "seq").glob("*.png"))) == one_span.total_frames

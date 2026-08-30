@@ -70,9 +70,12 @@ ROOT = Path(__file__).resolve().parent.parent
 #: عمليًا بين نصّ وآخر (Amiri للنص العام، AmiriQuran للقرآني).
 THEMES = {
     "nur-dark": dict(
-        font_role="body", base_font_size=64, size_step_px=6,
-        color_hex={"primary": "#FFFFFF", "muted": "#C9C9C9",
-                   "accent": "#F2C879"},
+        font_role="body", base_font_size=84, size_step_px=4,
+        # **تباين قبل ذوق.** الأدوار التلاتة كلها فاتحة بقصد: خلفيات
+        # الـtheme داكنة، ولون قريب منها (ذهبي على ذهبي) بيضيع مهما
+        # كانت الهالة. الذهبي محجوز لإبراز الكلمة المنطوقة وحده.
+        color_hex={"primary": "#FFFFFF", "muted": "#EDEDED",
+                   "accent": "#FFF4DC"},
         max_lines=2, fit="cover"),
 }
 
@@ -125,7 +128,7 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--theme", default="nur-dark", choices=sorted(THEMES))
     g.add_argument("--font", type=Path,
                    default=ROOT / "fonts" / "Amiri-Bold.ttf")
-    g.add_argument("--y-ratio", type=float, default=0.64)
+    g.add_argument("--y-ratio", type=float, default=0.74)
     g.add_argument("--project-id", default="untitled")
 
     ap.add_argument("--dry-run", action="store_true",
@@ -221,7 +224,7 @@ def run(args: argparse.Namespace) -> int:
     style = R.CaptionStyle(font=args.font, y_ratio=args.y_ratio)
     cmd = R.render(timeline, segments, assets, typo, output,
                    audio=args.audio, out_path=args.out, workdir=work,
-                   style=style, dry_run=args.dry_run)
+                   style=style, alignment=alignment, dry_run=args.dry_run)
     if args.dry_run:
         print(" ".join(cmd))            # stdout — للأنبوب
         say("dry-run: ولا ترميز")

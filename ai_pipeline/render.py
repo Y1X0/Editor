@@ -31,9 +31,13 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from shared.captions import blank_png, caption_box, pad_to_box, render_caption
+from PIL import Image, ImageFilter
+
+from shared.captions import render_caption
 from shared.ffmpeg import exe
 from shared.frames import caption_sequence
+
+from .models.alignment import Alignment
 
 from .errors import ContractError, FfmpegError
 from .models.assets import AssetsContract
@@ -74,9 +78,22 @@ class CaptionStyle:
     """
 
     font: Path
-    box_rgba: tuple[int, int, int, int] = (10, 12, 18, 200)
-    highlight_rgb: tuple[int, int, int] = (242, 200, 121)
-    y_ratio: float = 0.64
+    #: **هالة بدل صندوق.** الصندوق المستطيل بيقصّ التكوين ويبيّن
+    #: كقالب؛ الهالة بتيجي من قناة ألفا النص نفسه مموّهة، فبتتبع شكل
+    #: الحروف وبتعطي تباينًا بلا حدود صلبة. الرقم نصف قطر التمويه
+    #: كنسبة من حجم الخط.
+    scrim_radius: float = 0.30
+    scrim_alpha: int = 232
+    highlight_rgb: tuple[int, int, int] = (255, 214, 130)
+    #: ٠.٧٤ بتسيب مساحة كافية فوق واجهة إنستغرام (شوف `CLAUDE.md`).
+    y_ratio: float = 0.74
+    #: إطارات الانتقال عند بداية كل مقطع. ٩ = ٠.٣s عند 30fps.
+    anim_frames: int = 9
+    #: إزاحة `fade_in_up` بالبكسل، ومدى `fade_in_scale`.
+    rise_px: int = 34
+    scale_from: float = 0.86
+    #: تلوين الكلمة المنطوقة. بيحتاج `alignment` — بلاها بينطفي لحاله.
+    karaoke: bool = True
 
 
 @dataclass(frozen=True)
@@ -92,32 +109,105 @@ class Encode:
     extra: tuple[str, ...] = field(default=("-movflags", "+faststart"))
 
 
-# ── الكابشن: PNG لكل مقطع، وتسلسل مفهرس بالإطار ──────────────────────
+# ── الكابشن ──────────────────────────────────────────────────────────
+def word_frames(alignment: Alignment, timeline: Timeline,
+                segments: SegmentsContract) -> dict[int, list[tuple[int, int]]]:
+    """`{segment_id: [(إطار_البداية, فهرس_الكلمة_داخل_المقطع)]}`.
+
+    **الكلمة بتضل ملوّنة لحد بداية اللي بعدها، مش لحد نهايتها هي.**
+    قرار موثَّق بالمحرر ومقيس عليه: Whisper بيرجّع فراغًا صغيرًا بين كل
+    كلمتين، والإنهاء عند `end` بيخلّي الكابشن يرفرف بنص الجملة
+    (التغطية ٦٣٪ -> ٨١٪).
+
+    الحدود **مقصوصة على الـspan النصّي** تبع الـtimeline، فالسلطة على
+    بداية المقطع ونهايته تضل هناك — وعليه فحص بيقارن الطرفين.
+    """
+    fps = timeline.fps
+    spans = {sp.segment_id: sp for sp in timeline.text_spans}
+    out: dict[int, list[tuple[int, int]]] = {}
+    for seg in segments.segments:
+        sp = spans.get(seg.segment_id)
+        if sp is None:
+            continue
+        marks: list[tuple[int, int]] = []
+        for k, w in enumerate(alignment.words[seg.word_start:seg.word_end]):
+            f = max(sp.f_start, min(round(w.start * fps), sp.f_end - 1))
+            if marks and f <= marks[-1][0]:
+                continue                    # كلمتان بنفس الإطار: الأولى بتغلب
+            marks.append((f, k))
+        if not marks:
+            marks = [(sp.f_start, 0)]
+        marks[0] = (sp.f_start, marks[0][1])   # أول كلمة بتبلّش مع المقطع
+        out[seg.segment_id] = marks
+    return out
+
+
+def _scrim(img: "Image.Image", size: int, style: CaptionStyle) -> "Image.Image":
+    """هالة داكنة مشتقّة من ألفا النص نفسه.
+
+    **بديل الصندوق المستطيل.** الصندوق بيبيّن كقالب وبيقصّ التكوين؛
+    الهالة بتتبع شكل الحروف، فبتعطي التباين اللازم للقراءة على خلفية
+    فاتحة بلا حدّ صلب. مقيس بهالمستودع إن النص بلا أي خلفية بيعطي نسبة
+    تباين 1.06 على لقطة فاتحة — غير مرئي عمليًا.
+    """
+    r = max(2, int(size * style.scrim_radius))
+    halo = img.split()[3].filter(ImageFilter.GaussianBlur(r))
+    halo = halo.point(lambda v: min(255, int(v * 3.1)))
+    dark = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    dark.putalpha(halo.point(lambda v: v * style.scrim_alpha // 255))
+    out = Image.alpha_composite(dark, img)
+    return out
+
+
+def _place(base: "Image.Image", canvas: tuple[int, int],
+           dy: int = 0, scale: float = 1.0, alpha: float = 1.0):
+    """بيحطّ الصورة بلوحة ثابتة المقاس مع إزاحة/تحجيم/شفافية.
+
+    **اللوحة ثابتة بقصد**: مُدخل تسلسل الصور بياخد الأبعاد من أول ملف،
+    وأي اختلاف بعده بيقطع المخرَج بصمت — ٤٠٧×٢٠٨ مقابل ٤٠٨×٢٠٨ أعطت
+    ٧٣ إطار من ١٤٤. فالحركة بتصير **جوّا** اللوحة، لا بتغيّر مقاسها.
+    """
+    im = base
+    if scale != 1.0:
+        w, h = max(1, int(base.width * scale)), max(1, int(base.height * scale))
+        im = base.resize((w, h), Image.LANCZOS)
+    if alpha < 1.0:
+        a = im.split()[3].point(lambda v: int(v * alpha))
+        im = im.copy()
+        im.putalpha(a)
+    out = Image.new("RGBA", canvas, (0, 0, 0, 0))
+    out.paste(im, ((canvas[0] - im.width) // 2,
+                   (canvas[1] - im.height) // 2 + dy), im)
+    return out
+
+
 def rasterise_captions(
     timeline: Timeline, segments: SegmentsContract,
     typo: TypographyContract, output: Output, style: CaptionStyle,
-    workdir: str | Path,
+    workdir: str | Path, alignment: Alignment | None = None,
 ) -> str:
     """بيرجّع نمط `…/%06d.png` جاهز لـ`-framerate FPS -start_number 0`.
 
-    **القاعدة بتيجي من `shared`، والكتابة بس هون.** خريطة إطار->صورة من
-    `shared.frames.caption_sequence`، والتوحيد على صندوق واحد من
-    `shared.captions.caption_box`/`pad_to_box`. اللي انكتب هون حلقة
-    الوصلات الرمزية، وهي **آلية مش سياسة**.
+    **صورة لكل إطار**، مش لكل مقطع: الحركة والكاريوكي بيغيّروا الشكل
+    جوّا المقطع. التكرار بينمسك بذاكرة مؤقتة على المفتاح
+    `(مقطع, كلمة, خطوة الحركة)`، فعدد الملفات المميّزة بيضل بالعشرات.
 
-    وليش انكتبت بدل ما تنستدعى: `autoreel.render.materialise_captions`
-    بتعمل نفس الحلقة، بس `shared/` ما بتعيد تصديرها و`ai_pipeline`
-    ممنوعة تستورد `autoreel` مباشرة. وبعد هالcommit صارت **مستدعاة من
-    النظامين فعلًا** — يعني انطبقت عليها قاعدة الترقية لـ`shared/`.
-    ترقيتها commit مستقل، لأن `shared/` مقفولة بهاد.
+    خريطة إطار->صورة من `shared.frames.caption_sequence` — القاعدة
+    بتيجي من `shared`، والكتابة بس هون.
     """
     work = Path(workdir)
-    png_dir, seq_dir, box_dir = work / "png", work / "seq", work / "box"
-    for d in (png_dir, seq_dir, box_dir):
+    png_dir, seq_dir = work / "png", work / "seq"
+    for d in (png_dir, seq_dir):
         d.mkdir(parents=True, exist_ok=True)
 
     by_id = {s.segment_id: s for s in segments.segments}
-    frames: list[tuple[str, int, int]] = []
+    anim_of = {t.segment_id: t.animation for t in typo.segments}
+    marks = (word_frames(alignment, timeline, segments)
+             if (alignment is not None and style.karaoke) else {})
+
+    # ① الصور الأساسية: نسخة لكل كلمة مُبرَزة (أو وحدة بلا إبراز)
+    base: dict[tuple[int, int], "Image.Image"] = {}
+    sizes: dict[int, int] = {}
     for sp in timeline.text_spans:
         seg = by_id.get(sp.segment_id)
         if seg is None:
@@ -128,31 +218,68 @@ def rasterise_captions(
             raise ContractError(
                 f"مقطع {sp.segment_id}: ما في حجم/لون بالـtypography — "
                 f"الراسم ما بيخترع قيمة ناقصة")
-        cfg = {
-            "font": str(style.font), "size": ov.font_size,
-            "color": list(bytes.fromhex(ov.text_color[1:])),
-            "highlight": list(style.highlight_rgb),
-            "box": list(style.box_rgba), "y_ratio": style.y_ratio,
-        }
-        p = png_dir / f"{sp.segment_id:04d}.png"
-        render_caption(seg.text_arabic, cfg, output.width).save(p)
-        frames.append((str(p), sp.f_start, sp.f_end))
+        cfg = {"font": str(style.font), "size": ov.font_size,
+               "color": list(bytes.fromhex(ov.text_color[1:])),
+               "highlight": list(style.highlight_rgb),
+               "box": [0, 0, 0, 0],          # ولا صندوق — الهالة بديله
+               "y_ratio": style.y_ratio}
+        sizes[sp.segment_id] = ov.font_size
+        idxs = ([k for _, k in marks[sp.segment_id]]
+                if sp.segment_id in marks else [None])
+        for k in idxs:
+            img = render_caption(seg.text_arabic, cfg, output.width,
+                                 highlight_idx=k).convert("RGBA")
+            base[(sp.segment_id, -1 if k is None else k)] = _scrim(
+                img, ov.font_size, style)
 
-    # **كل صور التسلسل بنفس المقاس بالضبط.** مُدخل الصور بياخد أبعاد
-    # التيار من أول ملف، وفرق بكسل واحد بيقطع المخرَج بصمت: ٤٠٧×٢٠٨
-    # و٤٠٨×٢٠٨ أعطت ٧٣ إطار من ١٤٤ (مقيسة بهالمستودع).
+    if not base:
+        raise ContractError("ولا كابشن — `text_spans` فاضية")
+
+    # ② لوحة واحدة لكل التسلسل، بهامش يسع إزاحة الحركة
+    cw = max(i.width for i in base.values())
+    ch = max(i.height for i in base.values()) + 2 * style.rise_px
+    canvas = (cw + (cw % 2), ch + (ch % 2))
+
+    # ③ إطار إطار، مع ذاكرة على (مقطع, كلمة, خطوة)
+    cache: dict[tuple, str] = {}
+    frames: list[tuple[str, int, int]] = []
+    for sp in timeline.text_spans:
+        anim = anim_of.get(sp.segment_id, "none")
+        m = marks.get(sp.segment_id)
+        for n in range(sp.f_start, sp.f_end):
+            k = -1
+            if m:
+                k = next(idx for f, idx in reversed(m) if f <= n)
+            step = n - sp.f_start
+            phase = step if step < style.anim_frames and anim != "none" else -1
+            key = (sp.segment_id, k, phase)
+            if key not in cache:
+                t = 1.0 if phase < 0 else (phase + 1) / style.anim_frames
+                dy = sc = 0
+                a = t if phase >= 0 else 1.0
+                dy = int(style.rise_px * (1 - t)) if anim == "fade_in_up" else 0
+                sc = (style.scale_from + (1 - style.scale_from) * t
+                      if anim == "fade_in_scale" else 1.0)
+                path = png_dir / f"{sp.segment_id:02d}_{k+1:02d}_{phase+1:02d}.png"
+                _place(base[(sp.segment_id, k)], canvas,
+                       dy=dy, scale=sc, alpha=a).save(path)
+                cache[key] = str(path)
+            frames.append((cache[key], n, n + 1))
+
     seq = caption_sequence(frames, timeline.total_frames)
-    distinct = sorted({p for p in seq if p})
-    box = caption_box(distinct) if distinct else (2, 2)
-    padded = {p: pad_to_box(p, str(box_dir / f"{i:05d}.png"), box)
-              for i, p in enumerate(distinct)}
-    empty = (blank_png(str(box_dir / "blank.png"), box)
-             if any(p is None for p in seq) else None)
+    blank = png_dir / "blank.png"
+    if any(p is None for p in seq):
+        Image.new("RGBA", canvas, (0, 0, 0, 0)).save(blank)
 
     use_symlink = True
     for n, png in enumerate(seq):
         dst = seq_dir / f"{n:06d}.png"
-        target = os.path.abspath(padded[png] if png is not None else empty)
+        # **الحذف قبل الكتابة إلزامي.** تشغيلة تانية على نفس مجلّد
+        # العمل بتلاقي وصلة قديمة، فـ`symlink` بترمي، والسقوط للنسخ
+        # بيصير نسخ ملف على نفسه (`SameFileError`). مقيس: أول إعادة
+        # رسم بلا مسح يدوي بتنفجر.
+        dst.unlink(missing_ok=True)
+        target = os.path.abspath(png if png is not None else blank)
         if use_symlink:
             try:
                 os.symlink(target, dst)
@@ -253,7 +380,8 @@ def render(
     timeline: Timeline, segments: SegmentsContract, assets: AssetsContract,
     typo: TypographyContract, output: Output, *,
     audio: str | Path, out_path: str | Path, workdir: str | Path,
-    style: CaptionStyle, encode: Encode = Encode(), dry_run: bool = False,
+    style: CaptionStyle, alignment: Alignment | None = None,
+    encode: Encode = Encode(), dry_run: bool = False,
 ) -> list[str]:
     """بيرسم ويرجّع الأمر اللي انشغّل (أو اللي **كان** بينشغّل).
 
@@ -261,7 +389,7 @@ def render(
     فالمطبوع هو الأمر الحقيقي مش تقريبًا إله.
     """
     pattern = rasterise_captions(timeline, segments, typo, output, style,
-                                 workdir)
+                                 workdir, alignment=alignment)
     # `y_ratio` بيمرق **كوسيط**: الرسم بيوسّط الكابشن داخل صندوق موحّد
     # والoverlay بيوسّط الصندوق عند هالارتفاع، فالقيمتان لازم تكونا
     # نفسها. تمريرها بيخلّي `build_command` نقيّة وقابلة لإعادة الدخول.
