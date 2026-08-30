@@ -390,18 +390,37 @@ def shot_plan(timeline: Timeline,
     الكابشن اشتغل، مش لما الصوت انكتب.**
 
     والزوم بينتاخد من **أول** مقطع باللقطة: هو اللي بينرمّز عند بدايتها.
+
+    **ونفس الأصل مش كافيًا لوحده.** `in_point_for` بترجع للتوسيط لما
+    الاستمرار بيتجاوز نهاية الأصل — قرار صح (القطع محتوم لما يخلص
+    الأصل)، بس نتيجته **قفزة داخل نفس الملف**. مقيسة على الريل
+    الترويجي: المقطع ٧ رجع من ١٢.٧٦٧s لـ٥.٤٠٠s بنفس الأصل، وفرق
+    الإطارين ٢١/٢٥٥ بالخلفية — قطع مرئي كامل بلا مؤثر.
+
+    فالسلطة على الاستمرارية هي **الفهرس اللي بيبحث فيه الراسم**
+    (`timeline.asset_in_frame`)، لا هوية الأصل. وبالإطارات لا
+    بالثواني: مقارنة صحيحة بلا تسامح عائم.
+
+    والتسامح إطار واحد، مشتقّ لا مختار: `in_point` بتتقرّب للملي
+    و`quantize` بتتقرّب للإطار، فالفرق المتراكم ≤ إطار. مقيس: تلات
+    حدود طلعوا ±إطار وفرقهن بالبكسل ٠.٠٢–٠.٤٢ — غير مرئي.
     """
     plan: list[int] = []
     zooms: list[float] = []
-    prev: str | None = None
+    prev_ref: str | None = None
+    prev_end: int | None = None
     for sp in timeline.visual_spans:
         a = assets.by_segment(sp.segment_id)
-        if a.provider_ref == prev:
+        start = timeline.asset_in_frame.get(sp.segment_id)
+        joins = (a.provider_ref == prev_ref and start is not None
+                 and prev_end is not None and abs(start - prev_end) <= 1)
+        if joins:
             plan[-1] += sp.n_frames          # نفس اللقطة بتكمّل
         else:
             plan.append(sp.n_frames)
             zooms.append(MOTION[a.motion][0])
-        prev = a.provider_ref
+        prev_ref = a.provider_ref
+        prev_end = None if start is None else start + sp.n_frames
     return plan, zooms
 
 

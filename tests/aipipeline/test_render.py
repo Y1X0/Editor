@@ -810,12 +810,24 @@ def test_the_sfx_chain_pins_its_length_too(timeline, rassets, output):
 # ١٠ مقاطع بـ١٠ أصول مختلفة، فحدّ المقطع وحدّ اللقطة بيتصادفوا —
 # والفرق بينهن ما بيقدر يبيّن. أول ما انقسم النص لمقاطع من كلمتين
 # (نفس الأصل بيحمل تلاتة منهن) طلع **١٨ whoosh مقابل ٦ قطعات**.
+def joined_timeline(timeline):
+    """نفس الـtimeline بفهارس أصل **متّصلة**.
+
+    الـfixture الأصلية بتحطّ ‎{1:45, 2:90, 3:150}‎ **بقصد**: قيم مش
+    متّصلة عشان أي خلط بين `asset_in_frame` و`in_point` ينكشف. بس
+    `shot_plan` بتقرا الاستمرارية من نفس الحقل، فلحتى نعبّر عن
+    «لقطة وحدة» لازم فهارس متّصلة فعلًا: 45 ──► 145 ──► 235.
+    """
+    return timeline.model_copy(
+        update={"asset_in_frame": {1: 45, 2: 145, 3: 235}})
+
+
 def test_consecutive_spans_on_one_asset_are_one_shot(timeline, rassets,
                                                      output):
     """نفس `provider_ref` متتاليًا = لقطة وحدة، ومجموع إطاراتها."""
     same = AssetsContract(assets=tuple(
         a.model_copy(update={"provider_ref": "one"}) for a in rassets.assets))
-    plan, zooms = shot_plan(timeline, same)
+    plan, zooms = shot_plan(joined_timeline(timeline), same)
     assert plan == [timeline.total_frames]
     assert len(zooms) == 1
 
@@ -846,7 +858,7 @@ def test_the_shot_zoom_comes_from_the_first_span_of_the_shot(timeline,
         a[0].model_copy(update={"provider_ref": "one", "motion": "zoom_in"}),
         a[1].model_copy(update={"provider_ref": "one", "motion": "pan_left"}),
         a[2].model_copy(update={"provider_ref": "two", "motion": "zoom_out"})))
-    _, zooms = shot_plan(timeline, merged)
+    _, zooms = shot_plan(joined_timeline(timeline), merged)
     assert zooms == [MOTION["zoom_in"][0], MOTION["zoom_out"][0]]
 
 
@@ -857,14 +869,47 @@ def test_cut_cues_follow_shots_not_spans(timeline, rassets, output):
     """
     # **الأصول بتبيّن بمسارات المدخلات، مش برسم الفلاتر** — الرسم
     # فيه فهارس بس. أول كتابة للفحص دوّرت بالرسم فمرقت على فراغ.
-    def sfx_names(assets_contract):
-        cmd = cmd_of(timeline, assets_contract, output,
+    def sfx_names(assets_contract, tl=None):
+        cmd = cmd_of(tl or timeline, assets_contract, output,
                      audio_cfg=Audio(sfx=True))
         return {pathlib.Path(cmd[i + 1]).stem for i, a in enumerate(cmd)
                 if a == "-i" and cmd[i + 1].endswith(".wav")}
 
     same = AssetsContract(assets=tuple(
         a.model_copy(update={"provider_ref": "one"}) for a in rassets.assets))
-    assert "whoosh" not in sfx_names(same), "whoosh بلا قطع مرئي"
+    assert "whoosh" not in sfx_names(same, joined_timeline(timeline)), (
+        "whoosh بلا قطع مرئي")
     # وبأصول مختلفة بيرجع يبيّن — وإلا الفحص بيمرّ على فراغ
     assert "whoosh" in sfx_names(rassets)
+
+
+def test_a_rewound_in_point_breaks_the_shot(timeline, rassets):
+    """**نفس الأصل مش كافيًا: الفهرس هو السلطة.**
+
+    `in_point_for` بترجع للتوسيط لما الاستمرار بيتجاوز نهاية الأصل،
+    فبتصير قفزة **داخل نفس الملف**. انمسكت على E2E حقيقي: المقطع ٧
+    رجع من ١٢.٧٦٧s لـ٥.٤٠٠s، فرق الإطارين ٢١/٢٥٥ بالخلفية — قطع
+    مرئي كامل و`shot_plan` كانت بتعدّه استمرارًا فبيمرق بلا مؤثر.
+    """
+    same = AssetsContract(assets=tuple(
+        a.model_copy(update={"provider_ref": "one"}) for a in rassets.assets))
+    # الافتراضي متّصل: 45+100=145 ≠ 90 ... فالـfixture أصلًا مقطوعة.
+    joined = timeline.model_copy(update={"asset_in_frame": {1: 45, 2: 145, 3: 235}})
+    assert shot_plan(joined, same)[0] == [timeline.total_frames]
+    # ورجوع الفهرس للورا بيقطع اللقطة حتى بنفس الأصل
+    rewound = joined.model_copy(update={"asset_in_frame": {1: 45, 2: 145, 3: 10}})
+    plan, zooms = shot_plan(rewound, same)
+    assert plan == [190, 110] and len(zooms) == 2
+
+
+def test_one_frame_of_rounding_is_not_a_cut(timeline, rassets):
+    """`in_point` بتتقرّب للملي و`quantize` للإطار — الفرق المتراكم
+    ≤ إطار. مقيس على E2E: تلات حدود بـ±إطار وفرقهن بالبكسل
+    ٠.٠٢–٠.٤٢، يعني غير مرئي. إطاران قطع."""
+    same = AssetsContract(assets=tuple(
+        a.model_copy(update={"provider_ref": "one"}) for a in rassets.assets))
+    base = {1: 45, 2: 145, 3: 235}
+    for delta, shots in ((0, 1), (1, 1), (-1, 1), (2, 2), (-2, 2)):
+        tl = timeline.model_copy(
+            update={"asset_in_frame": {**base, 3: 235 + delta}})
+        assert len(shot_plan(tl, same)[0]) == shots, f"إزاحة {delta}"
