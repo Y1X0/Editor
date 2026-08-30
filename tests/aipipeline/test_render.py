@@ -22,7 +22,7 @@ from ai_pipeline.models.typography import (
 )
 from ai_pipeline.render import (
     MOTION, SPEECH_UPMIX_GAIN, Audio, CaptionStyle, Encode, build_command,
-    render,
+    render, shot_plan,
 )
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -802,3 +802,69 @@ def test_the_sfx_chain_pins_its_length_too(timeline, rassets, output):
         for part in mix:
             assert f"apad,atrim=end_sample={n}" in part, (
                 f"مزيج بلا تثبيت طول: {part}")
+
+
+# ── خطة اللقطات: القطع المرئي مش حدّ المقطع ──────────────────────────
+#
+# **انحدار ظهر لما اشتغلت ميزة تانية.** الفحوص القديمة كانت على
+# ١٠ مقاطع بـ١٠ أصول مختلفة، فحدّ المقطع وحدّ اللقطة بيتصادفوا —
+# والفرق بينهن ما بيقدر يبيّن. أول ما انقسم النص لمقاطع من كلمتين
+# (نفس الأصل بيحمل تلاتة منهن) طلع **١٨ whoosh مقابل ٦ قطعات**.
+def test_consecutive_spans_on_one_asset_are_one_shot(timeline, rassets,
+                                                     output):
+    """نفس `provider_ref` متتاليًا = لقطة وحدة، ومجموع إطاراتها."""
+    same = AssetsContract(assets=tuple(
+        a.model_copy(update={"provider_ref": "one"}) for a in rassets.assets))
+    plan, zooms = shot_plan(timeline, same)
+    assert plan == [timeline.total_frames]
+    assert len(zooms) == 1
+
+
+def test_a_changed_asset_starts_a_new_shot(timeline, rassets, output):
+    """`provider_ref` مختلف = قطع مرئي = لقطة جديدة."""
+    plan, _ = shot_plan(timeline, rassets)          # f1·f2·f3 كلها مختلفة
+    assert plan == [s.n_frames for s in timeline.visual_spans]
+
+
+def test_an_asset_returning_after_another_is_a_new_shot(timeline, rassets):
+    """أ ──► ب ──► أ: **تلات لقطات مش اتنين.** العين شافت قطعًا
+    بينهن، فرجوع الأصل قطع تاني لا استمرار."""
+    a = rassets.assets
+    ab = AssetsContract(assets=(
+        a[0].model_copy(update={"provider_ref": "x"}),
+        a[1].model_copy(update={"provider_ref": "y"}),
+        a[2].model_copy(update={"provider_ref": "x"})))
+    plan, zooms = shot_plan(timeline, ab)
+    assert len(plan) == 3 and len(zooms) == 3
+
+
+def test_the_shot_zoom_comes_from_the_first_span_of_the_shot(timeline,
+                                                             rassets):
+    """الزوم اللي بينرمّز عند بداية اللقطة هو زوم أول مقطع فيها."""
+    a = rassets.assets
+    merged = AssetsContract(assets=(
+        a[0].model_copy(update={"provider_ref": "one", "motion": "zoom_in"}),
+        a[1].model_copy(update={"provider_ref": "one", "motion": "pan_left"}),
+        a[2].model_copy(update={"provider_ref": "two", "motion": "zoom_out"})))
+    _, zooms = shot_plan(timeline, merged)
+    assert zooms == [MOTION["zoom_in"][0], MOTION["zoom_out"][0]]
+
+
+def test_cut_cues_follow_shots_not_spans(timeline, rassets, output):
+    """**الحارس على الانحدار نفسه، على الأمر المرسَل لffmpeg.**
+
+    كل المقاطع على أصل واحد = ولا قطع مرئي = ولا `whoosh` بالرسم.
+    """
+    # **الأصول بتبيّن بمسارات المدخلات، مش برسم الفلاتر** — الرسم
+    # فيه فهارس بس. أول كتابة للفحص دوّرت بالرسم فمرقت على فراغ.
+    def sfx_names(assets_contract):
+        cmd = cmd_of(timeline, assets_contract, output,
+                     audio_cfg=Audio(sfx=True))
+        return {pathlib.Path(cmd[i + 1]).stem for i, a in enumerate(cmd)
+                if a == "-i" and cmd[i + 1].endswith(".wav")}
+
+    same = AssetsContract(assets=tuple(
+        a.model_copy(update={"provider_ref": "one"}) for a in rassets.assets))
+    assert "whoosh" not in sfx_names(same), "whoosh بلا قطع مرئي"
+    # وبأصول مختلفة بيرجع يبيّن — وإلا الفحص بيمرّ على فراغ
+    assert "whoosh" in sfx_names(rassets)

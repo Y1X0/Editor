@@ -370,6 +370,41 @@ def video_chain(k: int, span, asset, output: Output, fps: int) -> str:
             f"setpts=PTS-STARTPTS[v{k}]")
 
 
+def shot_plan(timeline: Timeline,
+              assets: AssetsContract) -> tuple[list[int], list[float]]:
+    """خطة **اللقطات** — spans متتالية بنفس الأصل بتنعدّ لقطة وحدة.
+
+    **بالمحرر حدّ `frame_plan` هو قطع مرئي بالتعريف**، فمؤثر `cut`
+    بينعلّق عليه مباشرة. هون مش هيك: `resolve_assets` بتكمّل نافذة
+    الأصل عبر مقاطع متتالية بنفس الأصل (`in_point_for(after=…)`)،
+    فحدّ المقطع بيصير **غير مرئي** بقصد — ودّينا القطع للمعنى لا
+    للجملة.
+
+    فلو علّقنا الـwhoosh على حدود الـspans بينضرب عند كل تبدّل كابشن.
+    مقيس على الريل الترويجي بعد ما انقسم لمقاطع من كلمتين: **١٨
+    whoosh مقابل ٦ قطعات مرئية**. الصوت بيصير ضجّة، وأسوأ: بيوعد
+    الأذن بقطع ما بيجي.
+
+    ولا واحدة من الفحوص القديمة كانت بتمسكها — كانت ١٠ مقاطع بـ١٠
+    أصول مختلفة، فالحدّان بيتصادفوا. **الانحدار ظهر لما تقسيم
+    الكابشن اشتغل، مش لما الصوت انكتب.**
+
+    والزوم بينتاخد من **أول** مقطع باللقطة: هو اللي بينرمّز عند بدايتها.
+    """
+    plan: list[int] = []
+    zooms: list[float] = []
+    prev: str | None = None
+    for sp in timeline.visual_spans:
+        a = assets.by_segment(sp.segment_id)
+        if a.provider_ref == prev:
+            plan[-1] += sp.n_frames          # نفس اللقطة بتكمّل
+        else:
+            plan.append(sp.n_frames)
+            zooms.append(MOTION[a.motion][0])
+        prev = a.provider_ref
+    return plan, zooms
+
+
 def build_command(
     timeline: Timeline, assets: AssetsContract, output: Output,
     audio: str | Path, caption_pattern: str, out_path: str | Path, *,
@@ -414,10 +449,9 @@ def build_command(
     idx = n + 2
     cues, sfx_inputs = [], {}
     if audio_cfg.sfx:
+        plan, zooms = shot_plan(timeline, assets)
         cues = plan_cues(
-            [sp.n_frames for sp in spans], fps,
-            zooms=[MOTION[assets.by_segment(sp.segment_id).motion][0]
-                   for sp in spans],
+            plan, fps, zooms=zooms,
             caption_frames=[t.f_start for t in timeline.text_spans])
         for name in sorted(asset_usage(cues)):
             sfx_inputs[name] = idx
