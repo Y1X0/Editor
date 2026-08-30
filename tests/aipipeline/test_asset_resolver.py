@@ -16,7 +16,7 @@ from ai_pipeline.agents.resolver import (
     DURATION_MARGIN_S, Catalog, CatalogEntry, choose, in_point_for,
     load_catalog, resolve, resolve_assets, score,
 )
-from ai_pipeline.agents.schemas import AssetIntent
+from ai_pipeline.agents.schemas import AssetIntent, AssetIntentItem
 from ai_pipeline.errors import AssetError, ContractError
 from ai_pipeline.models.assets import AssetsContract, Probe
 
@@ -322,3 +322,59 @@ def test_must_include_alone_is_enough_evidence(root):
     got = resolve_assets(intent(query="something else entirely",
                                 must_include=["dune"]), NEED, catalog(e), root)
     assert got[1].provider_ref == e.provider_ref
+
+
+# ── الاستمرارية عبر مقاطع متتالية بنفس الأصل ─────────────────────────
+def test_the_same_asset_continues_instead_of_recentring(root):
+    """مقطعان متتاليان بنفس الأصل: التاني بيبلّش من حيث انتهى الأول.
+
+    **القطع بيضل بالـtimeline، والعين ما بتشوفه.** هيك بتنحلّ مشكلة
+    «الخلفية بتتبدّل مع كل جملة» بلا ما نلمس `quantize` — مقيسة على
+    فيديو مرجعي حمل تلات جمل بلقطة وحدة.
+    """
+    e = entry(root)                                   # 12.0s
+    want = AssetIntentItem(segment_id=1, query="rain night window",
+                           shot_type="macro", palette="charcoal")
+    two = AssetIntent(intents=(want, want.model_copy(update={"segment_id": 2})))
+    got = resolve_assets(two, {1: 3.0, 2: 3.0}, catalog(e), root)
+    assert got[1].provider_ref == got[2].provider_ref
+    assert got[2].in_point == round(got[1].in_point + 3.0, 3), (
+        "المقطع التاني ما كمّل — بيرجع يتوسّط فالعين بتشوف قفزة")
+
+
+def test_a_different_asset_in_between_resets_the_window(root):
+    """أصل بيرجع **بعد أصل غيره** بيبلّش من جديد.
+
+    الاستمرارية إلها معنى للمتتالي وبس: العين شافت قطعًا للأصل التاني
+    على أي حال، فمتابعة النافذة القديمة بتوفّر لا شي وبتعقّد التتبّع.
+    """
+    a = entry(root)
+    b = entry(root, name="other.mp4", body=b"OTHER-BYTES",
+              keywords=("sun", "desert", "road"), shot_type="wide",
+              palette="warm_gold")
+    mk = lambda sid, q, sh, pa: AssetIntentItem(   # noqa: E731
+        segment_id=sid, query=q, shot_type=sh, palette=pa)
+    three = AssetIntent(intents=(
+        mk(1, "rain night window", "macro", "charcoal"),
+        mk(2, "sun desert road", "wide", "warm_gold"),
+        mk(3, "rain night window", "macro", "charcoal")))
+    got = resolve_assets(three, {1: 3.0, 2: 3.0, 3: 3.0},
+                         catalog(a, b), root)
+    assert got[1].provider_ref == got[3].provider_ref
+    assert got[3].in_point == got[1].in_point, "ما رجع للتوسيط"
+
+
+def test_continuation_falls_back_when_the_asset_runs_out(root):
+    """الأصل ما بيكفّي لنافذة تانية -> بيرجع للتوسيط، ما بيتجاوز نهايته.
+
+    بلا هالسقوط، `in_point + المطلوب` بيتخطّى المدة و`quantize` بترفض
+    بـ«الأصل بيعطي N إطار من M مطلوبة» — فشل صحيح برسالة بمكان غلط.
+    """
+    e = entry(root, probe=Probe(width=1920, height=1080, fps=30.0,
+                                duration=7.0))
+    want = AssetIntentItem(segment_id=1, query="rain night window",
+                           shot_type="macro", palette="charcoal")
+    two = AssetIntent(intents=(want, want.model_copy(update={"segment_id": 2})))
+    got = resolve_assets(two, {1: 3.0, 2: 3.0}, catalog(e), root)
+    for sid in (1, 2):
+        assert got[sid].in_point + 3.0 <= e.probe.duration

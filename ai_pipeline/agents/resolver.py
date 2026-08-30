@@ -167,8 +167,24 @@ def verify(entry: CatalogEntry, root: Path, required_s: float,
     return p
 
 
-def in_point_for(entry: CatalogEntry, required_s: float) -> float:
-    """نافذة موسَّطة بالأصل. **حساب من بيانات الأصل، مش قرار مخفي.**"""
+def in_point_for(entry: CatalogEntry, required_s: float,
+                 after: float | None = None) -> float:
+    """نافذة بالأصل. **حساب من بيانات الأصل، مش قرار مخفي.**
+
+    `after` = نهاية النافذة اللي أخذها المقطع السابق **من نفس الأصل**.
+    لما تنمرَّر، النافذة بتكمّل من هناك بدل ما تتوسّط من جديد — فالقطع
+    بين المقطعين بيصير **غير مرئي**: نفس اللقطة بتكمّل.
+
+    وليش هاد مهمّ: قاعدة القطع بـ`quantize` بتقطع عند **كل** بداية نصّ،
+    فالخلفية بتتبدّل مع كل جملة والإحساس بيصير مضطربًا. مقيس على فيديو
+    مرجعي حقيقي: لقطة وحدة حملت **تلات جمل**، والقطع صار عند حدّ المعنى
+    لا حدّ الجملة. الاستمرارية هون بتعطي نفس الأثر **بلا ما تلمس
+    `quantize`** — القطع بيضل بالـtimeline، والعين ما بتشوفه.
+
+    وبترجع للتوسيط لو الباقي ما بيكفّي، بدل ما تتجاوز نهاية الأصل.
+    """
+    if after is not None and after + required_s <= entry.probe.duration:
+        return round(after, 3)
     return round(max(0.0, (entry.probe.duration - required_s) / 2), 3)
 
 
@@ -177,6 +193,11 @@ def resolve_assets(intent: AssetIntent, required: Mapping[int, float],
                    catalog: Catalog, root: Path) -> dict[int, ResolvedAsset]:
     """`AssetIntent` + كتالوج ──► أصول مُتحقَّق منها."""
     out: dict[int, ResolvedAsset] = {}
+    #: آخر أصل انختار وأين انتهت نافذته — للاستمرارية عبر مقاطع
+    #: متتالية بنفس الأصل. **متتالية فقط**: أصل بيرجع بعد أصل غيره
+    #: بيبلّش من جديد، لأن العين شافت قطعًا بينهما على أي حال.
+    prev_ref: str | None = None
+    prev_end: float = 0.0
     for want in intent.intents:
         if want.segment_id not in required:
             raise AssetError(
@@ -187,11 +208,14 @@ def resolve_assets(intent: AssetIntent, required: Mapping[int, float],
             raise AssetError(f"مقطع {want.segment_id}: مدة مطلوبة {need}")
         e = choose(catalog, want)
         p = verify(e, root, need, want.segment_id)
+        after = prev_end if e.provider_ref == prev_ref else None
+        start = in_point_for(e, need, after)
         out[want.segment_id] = ResolvedAsset(
             segment_id=want.segment_id, source_type=e.source_type,
             provider=e.provider, provider_ref=e.provider_ref, file_path=p,
             sha256=e.sha256, license=e.license, attribution=e.attribution,
-            probe=e.probe, in_point=in_point_for(e, need))
+            probe=e.probe, in_point=start)
+        prev_ref, prev_end = e.provider_ref, start + need
     return out
 
 

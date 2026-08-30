@@ -225,12 +225,39 @@ def _intent(seg):
 
 
 def test_the_computed_duration_feeds_the_resolver(tmp_path):
+    """المدة المحسوبة بتوصل لـ`in_point` فعلًا.
+
+    **الأول بيتوسّط، واللي بعده بيكمّل** — التلاتة بهالـfixture بياخدوا
+    نفس الأصل (كتالوج بصفّ واحد)، فالمتتاليان بيكمّلوا نافذة سابقهم
+    بدل ما يتوسّطوا. القياس على السلسلة لا على صيغة التوسيط: نافذة كل
+    مقطع بتساوي مدّته المطلوبة، ولا وحدة بتتجاوز الأصل.
+    """
     al, seg = alignment(), segments()
     need = required_seconds(OUT, seg, al, audio(al))
     got = resolve_assets(_intent(seg), need, _catalog(tmp_path, 30.0), tmp_path)
     assert set(got) == {1, 2, 3}
+    assert got[1].in_point == round((30.0 - need[1]) / 2, 3)   # الأول: توسيط
+    for a, b in ((1, 2), (2, 3)):                              # الباقي: تتابع
+        assert got[b].in_point == round(got[a].in_point + need[a], 3)
     for sid, a in got.items():
-        assert a.in_point == round((30.0 - need[sid]) / 2, 3)
+        assert a.in_point + need[sid] <= 30.0
+
+
+def test_a_longer_window_moves_the_in_point(tmp_path):
+    """**المدة هي اللي بتحرّك `in_point`، مش الترتيب.**
+
+    الفحص فوق صار يقيس التتابع، فلو المدة انفصلت عن النافذة كليًّا
+    بيضل أخضر. هون بنغيّر المدة المطلوبة وبنتأكّد إن الناتج بيتغيّر —
+    وهاد الادّعاء اللي اسم الفحص السابق بيعد فيه.
+    """
+    al, seg = alignment(), segments()
+    need = required_seconds(OUT, seg, al, audio(al))
+    base = resolve_assets(_intent(seg), need, _catalog(tmp_path, 30.0),
+                          tmp_path)
+    wider = {k: v + 2.0 for k, v in need.items()}
+    got = resolve_assets(_intent(seg), wider, _catalog(tmp_path, 30.0),
+                         tmp_path)
+    assert got[1].in_point != base[1].in_point
 
 
 def test_an_asset_too_short_for_the_computed_window_fails(tmp_path):

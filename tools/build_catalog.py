@@ -54,26 +54,63 @@ def probe(p: Path) -> dict:
             "duration": int(h) * 3600 + int(m) * 60 + float(s)}
 
 
+def bottom_scrim(w: int, h: int, dst: Path, start: float = 0.52,
+                 peak: int = 190) -> Path:
+    """تدرّج داكن بأسفل الإطار — **حتى يُقرأ الكابشن على أي لقطة**.
+
+    الهالة حوالين الحروف بتكفّي على خلفية هادئة وبتفشل على صورة
+    مصوّرة مزدحمة: الحروف بتلاقي حافة أو تباينًا عاليًا تحتها.
+    التدرّج بيعطي أرضية ثابتة بلا حدّ صلب ظاهر.
+
+    مخبوز **بالأصل** لا مضافًا وقت الرندر: بيكلّف صفرًا بكل تشغيلة،
+    وبينطبّق على اللقطات الحقيقية بنفس الأداة.
+    """
+    from PIL import Image                                       # noqa: PLC0415
+    g = Image.new("L", (1, h), 0)
+    px = g.load()
+    for y in range(h):
+        t = (y / (h - 1) - start) / (1 - start)
+        px[0, y] = 0 if t <= 0 else int(peak * t ** 1.7)
+    layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    layer.putalpha(g.resize((w, h)))
+    layer.save(dst)
+    return dst
+
+
 def animate(src: Path, dst: Path, seconds: float, fps: int, size: str) -> None:
-    """صورة ثابتة ──► لقطة بزحف بطيء.
+    """صورة ثابتة ──► لقطة عمودية بزحف بطيء.
 
     **الحركة بتنخبز بالأصل مش بالراسم** — الراسم بيثبّت الزوم داخل
     المقطع بقرار موثَّق («الزوم ثابت داخل المقطع مش zoompan متحرك»).
     فالزحف المستمر مكانه هون، والقاعدة هناك تضل كما هي.
+
+    **وتعبئة مموّهة بدل القصّ**، لأن مصدر الصور المولَّدة غالبًا مربّع
+    أو 3:4: القصّ لـ9:16 بياكل نصّ الصورة وبيشيل موضوعها. النسخة
+    المموّهة بتملا الإطار والنسخة الحادّة بتقعد فوقها كاملة —
+    فولا بكسل من الموضوع بيضيع.
     """
-    w, h = size.split("x")
+    w, h = (int(x) for x in size.split("x"))
+    bw, bh = w * 3 // 2, h * 3 // 2          # غرفة للزحف
     n = int(seconds * fps)
+    scrim = dst.with_suffix(".scrim.png")
+    bottom_scrim(w, h, scrim)
+    chain = (
+        f"[0:v]scale={bw}:{bh}:force_original_aspect_ratio=increase,"
+        f"crop={bw}:{bh},gblur=sigma=42,eq=brightness=-0.16:saturation=0.85[bg];"
+        f"[0:v]scale={bw}:{bh}:force_original_aspect_ratio=decrease[fg];"
+        f"[bg][fg]overlay=(W-w)/2:(H-h)/2,"
+        f"zoompan=z='1.00+0.09*on/{n}':"
+        f"x='iw/2-(iw/zoom/2)+(on-{n // 2})*0.08':"
+        f"y='ih/2-(ih/zoom/2)':d={n}:s={w}x{h}:fps={fps}[kb];"
+        f"[kb][1:v]overlay=0:0[o]")
     subprocess.run([
         exe(), "-v", "error", "-loop", "1", "-i", str(src),
-        "-vf", (f"scale={int(w)*3//2}:{int(h)*3//2}:"
-                f"force_original_aspect_ratio=increase,"
-                f"crop={int(w)*3//2}:{int(h)*3//2},"
-                f"zoompan=z='1.00+0.09*on/{n}':"
-                f"x='iw/2-(iw/zoom/2)+(on-{n//2})*0.08':"
-                f"y='ih/2-(ih/zoom/2)':d={n}:s={w}x{h}:fps={fps}"),
+        "-loop", "1", "-i", str(scrim),
+        "-filter_complex", chain, "-map", "[o]",
         "-frames:v", str(n), "-r", str(fps), "-pix_fmt", "yuv420p",
         "-c:v", "libx264", "-preset", "medium", "-crf", "19", "-an",
         "-y", str(dst)], check=True)
+    scrim.unlink(missing_ok=True)
 
 
 def keywords_of(name: str) -> list[str]:

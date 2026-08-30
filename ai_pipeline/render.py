@@ -31,7 +31,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from PIL import Image, ImageFilter
+from PIL import Image, ImageChops, ImageFilter
 
 from shared.captions import render_caption
 from shared.ffmpeg import exe
@@ -150,13 +150,21 @@ def _scrim(img: "Image.Image", size: int, style: CaptionStyle) -> "Image.Image":
     فاتحة بلا حدّ صلب. مقيس بهالمستودع إن النص بلا أي خلفية بيعطي نسبة
     تباين 1.06 على لقطة فاتحة — غير مرئي عمليًا.
     """
+    # **طبقتان**: نواة ضيّقة كثيفة تحت الحروف مباشرة، وهالة واسعة
+    # خفيفة حواليها. الطبقة الوحدة بتفشل على خلفية مصوّرة مزدحمة —
+    # تكثيفها بيعطي سحابة سودا واضحة، وتخفيفها بيضيّع النص.
+    a = img.split()[3]
     r = max(2, int(size * style.scrim_radius))
-    halo = img.split()[3].filter(ImageFilter.GaussianBlur(r))
-    halo = halo.point(lambda v: min(255, int(v * 3.1)))
+    core = a.filter(ImageFilter.GaussianBlur(max(2, r // 3)))
+    core = core.point(lambda v: min(255, int(v * 4.4)))
+    wide = a.filter(ImageFilter.GaussianBlur(r * 2))
+    wide = wide.point(lambda v: min(255, int(v * 2.6)))
+    # `ImageChops.lighter` بدل `getdata`: الأخيرة مهجورة بـPillow 14،
+    # وبتمرّ على البكسلات بحلقة بايثون — الفرق مقيس بمئات الإطارات.
+    halo = ImageChops.lighter(core, wide.point(lambda v: v * 3 // 5))
     dark = Image.new("RGBA", img.size, (0, 0, 0, 0))
     dark.putalpha(halo.point(lambda v: v * style.scrim_alpha // 255))
-    out = Image.alpha_composite(dark, img)
-    return out
+    return Image.alpha_composite(dark, img)
 
 
 def _place(base: "Image.Image", canvas: tuple[int, int],
