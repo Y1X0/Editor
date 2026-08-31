@@ -20,7 +20,8 @@ P = pathlib.Path(__file__).resolve().parents[2] / "ai_pipeline/agents/prompts"
 
 #: **الإصدارات المنشورة.** append-only: بينضاف لهالجدول، وما بينشال منه.
 #: حذف إصدار من القرص أو من السجلّ بيفشّل الفحص هون.
-PUBLISHED = {("script", "v1"), ("visual", "v1"), ("typography", "v1")}
+PUBLISHED = {("script", "v1"), ("visual", "v1"), ("typography", "v1"),
+             ("editorial", "v1")}
 
 
 def digest(path: pathlib.Path) -> str:

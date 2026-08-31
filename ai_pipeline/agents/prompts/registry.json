@@ -20,6 +20,13 @@
       "sha256": "8a5b2f1de2f823cf28fb2ae10d35d59ab1ab4faeed1c2f7da24ac2eef848c4ac",
       "model_family": "claude-opus-5",
       "created": "2026-08-29"
+    },
+    {
+      "agent": "editorial",
+      "version": "v1",
+      "sha256": "252792ccd780f5f903b14ef24907d4081b573762c71893a2faa59fc8b72614ed",
+      "model_family": "claude-opus-5",
+      "created": "2026-08-31"
     }
   ]
 }

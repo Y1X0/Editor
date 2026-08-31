@@ -1,0 +1,3 @@
+{
+  "text": "{\"beats\": [{\"beat_id\": 1, \"segment_ids\": [1, 2], \"role\": \"hook\"}], \"shots\": [{\"shot_id\": 1, \"beat_id\": 1, \"order\": 0}]}"
+}

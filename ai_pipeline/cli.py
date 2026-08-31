@@ -44,6 +44,7 @@ from shared.probe import check_ffmpeg, ffmpeg_version
 
 from . import render as R
 from .agents import script as script_agent
+from .agents import editorial as editorial_agent
 from .agents import typography as typo_agent
 from .agents import visual as visual_agent
 from .agents.expand import ThemeView
@@ -61,6 +62,8 @@ from .validation.font import check_font_can_render
 from .validation.inputs import (
     check_audio_matches_alignment, check_script, probe_audio,
 )
+from .edit.compiler import compile_plan
+from .edit.critic import creative_checks, report
 from .validation.semantic import check_typography
 from .window import required_seconds
 
@@ -168,6 +171,17 @@ def build_parser() -> argparse.ArgumentParser:
                    help="موسيقى خلفية. بتنلفّ وبتنقصّ لطول الشريط")
     g.add_argument("--music-gain", type=float, default=0.12)
 
+    g = ap.add_argument_group("المونتاج")
+    # **مطفي افتراضيًا، وهاد مش تفضيلًا.** تشغيله بيغيّر خطة اللقطات
+    # لكل مشروع موجود: عدد اللقطات وحدودها بتنشتقّ من أوزان الوكيل بدل
+    # ما تكون لقطة لكل مقطع. فالافتراضي بيضل المسار المقيس، والعلم
+    # بيفتح الجديد — نفس نمط `--sfx` بالمحرر وبنفس السبب.
+    g.add_argument("--editorial", action="store_true",
+                   help="شغّل وكيل المونتاج (خطة beats/لقطات) — مطفي افتراضيًا")
+    g.add_argument("--no-editorial", dest="editorial", action="store_false",
+                   help="اغلبه حتى لو انطلب")
+    ap.set_defaults(editorial=False)
+
     ap.add_argument("--dry-run", action="store_true",
                     help="بيبني كل شي وبيطبع أمر ffmpeg بلا ترميز")
     ap.add_argument("-q", "--quiet", action="store_true")
@@ -245,7 +259,24 @@ def run(args: argparse.Namespace) -> int:
         f"#{s.segment_id} {s.animation}" for s in typo.segments))
 
     # ── ٤· الحدّ: ثواني ──► إطارات ───────────────────────────────────
-    timeline = quantize(output, segments, alignment, assets, audio_duration)
+    #
+    # **المساران بينتهوا لنفس `quantize`.** المسار التحريري ما بيحسب
+    # زمنًا لحاله: `compile_plan` بتحوّل الأوزان النسبية لحدود إطارات
+    # وبتمرّرها لـ`quantize` كـ`shots`. فما في معبر ثانٍ بين الثواني
+    # والإطارات — الشرط اللي `ai_pipeline/CLAUDE.md` بيقفله.
+    if args.editorial:
+        plan = editorial_agent.run(client, segments, harness=harness)
+        say(f"Editorial: {len(plan.beats)} beat · {len(plan.shots)} لقطة · "
+            f"{len(plan.emphasis)} إبراز · {len(plan.cues)} مؤثر")
+        timeline = compile_plan(plan, output, segments, alignment, assets,
+                                audio_duration)
+        # **الناقد بيحكي، وما بيوقف.** المخالفة الإبداعية حكم على ذوق
+        # لا على صحّة، ورميها كان بيمنع مخرَجًا صالحًا بسبب رأي. والصمت
+        # عنها أسوأ — فبتنطبع كلها على stderr.
+        for line in report(creative_checks(plan, timeline, assets)):
+            print(f"  ⚑ {line}", file=sys.stderr)
+    else:
+        timeline = quantize(output, segments, alignment, assets, audio_duration)
     say(f"Timeline: {timeline.total_frames} إطار · "
         f"{timeline.total_samples} عيّنة")
 

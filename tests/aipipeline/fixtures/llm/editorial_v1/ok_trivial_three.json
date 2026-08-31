@@ -1,0 +1,3 @@
+{
+  "text": "{\"beats\": [{\"beat_id\": 1, \"segment_ids\": [1], \"role\": \"hook\"}, {\"beat_id\": 2, \"segment_ids\": [2], \"role\": \"escalation\"}, {\"beat_id\": 3, \"segment_ids\": [3], \"role\": \"payoff\"}], \"shots\": [{\"shot_id\": 1, \"beat_id\": 1, \"order\": 0}, {\"shot_id\": 2, \"beat_id\": 2, \"order\": 0}, {\"shot_id\": 3, \"beat_id\": 3, \"order\": 0}]}"
+}
