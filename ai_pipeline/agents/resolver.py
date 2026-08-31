@@ -28,13 +28,14 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from typing import Literal, Mapping
+from typing import Literal, Mapping, Sequence
 
 from pydantic import Field, ValidationError, model_validator
 
 from ..errors import AssetError, ContractError
 from ..models.assets import AssetsContract, Probe, SourceType
 from ..models.base import SHA256, StrictModel
+from . import scoring
 from .expand import ResolvedAsset, ThemeView, expand_asset_intents
 from .schemas import AssetIntent, AssetIntentItem, Palette, ShotType
 
@@ -172,14 +173,43 @@ def score(entry: CatalogEntry, want: AssetIntentItem) -> int | None:
     return pts
 
 
-def choose(catalog: Catalog, want: AssetIntentItem) -> CatalogEntry:
+def rank(entry: CatalogEntry, want: AssetIntentItem, *,
+         required_s: float = 0.0, previous_ref: str | None = None,
+         used: Sequence[str] = ()) -> float | None:
+    """درجة الترجيح بالحدود الثمانية — أو `None` لو الصفّ مستبعَد.
+
+    **الاستبعاد بيضل بـ`score`**، وهاد الفصل مقصود: `must_avoid` و
+    `must_include` **قواطع**، لا حدود ترجيح. حدّ بوزن كبير بيقدر
+    يشتري مخالفة؛ القاطع لأ. نفس الفصل اللي بـ`edit/repetition.py`
+    بين العقوبة والحارس.
+
+    والدرجة القديمة بتدخل كأساس بوزن ١: كتالوج بلا `analysis` بتصير
+    كل حدوده التحليلية صفرًا، فالترتيب بيرجع **ترتيب اليوم بالضبط**.
+    شرط الترحيل، وعليه فحص.
+    """
+    base = score(entry, want)
+    if base is None:
+        return None
+    t = scoring.terms(entry, want, required_s=required_s,
+                      previous_ref=previous_ref, used=used)
+    return base + scoring.combine(t)
+
+
+def choose(catalog: Catalog, want: AssetIntentItem, *,
+           required_s: float = 0.0, previous_ref: str | None = None,
+           used: Sequence[str] = ()) -> CatalogEntry:
     """أعلى درجة، وعند التعادل **أصغر `provider_ref` أبجديًا**.
 
     فكّ التعادل بالاسم مش بالترتيب داخل الملف: ترتيب الكتالوج بيتغيّر
     مع أي إضافة، والنتيجة كانت بتتغيّر معه بلا سبب.
+
+    **والدرجة بتموت هون.** ما بترجع للمستدعي ولا بتنحفظ بعقد — هاي
+    درجة اختيار، لا حكمًا على المونتاج. شوف رأس `scoring.py`، وفي
+    حارس بيفحص إنها ما بتطلع.
     """
     ranked = [(s, e) for e in catalog.entries
-              if (s := score(e, want)) is not None]
+              if (s := rank(e, want, required_s=required_s,
+                            previous_ref=previous_ref, used=used)) is not None]
     if not ranked:
         raise AssetError(
             f"مقطع {want.segment_id}: ولا أصل بالكتالوج بيطابق "
@@ -268,6 +298,9 @@ def resolve_assets(intent: AssetIntent, required: Mapping[int, float],
     #: بيبلّش من جديد، لأن العين شافت قطعًا بينهما على أي حال.
     prev_ref: str | None = None
     prev_end: float = 0.0
+    #: كل الأصول اللي انختارت لحد هلق، بالترتيب — مدخل حدّي التكرار
+    #: والقُرب. **بالترتيب لا كمجموعة**: القُرب بيلزمه المواضع.
+    used: list[str] = []
     for want in intent.intents:
         if want.segment_id not in required:
             raise AssetError(
@@ -276,7 +309,23 @@ def resolve_assets(intent: AssetIntent, required: Mapping[int, float],
         need = required[want.segment_id]
         if need <= 0:
             raise AssetError(f"مقطع {want.segment_id}: مدة مطلوبة {need}")
-        e = choose(catalog, want)
+        # **السياق بينمرّر، وإلا الحدود الثمانية ميتة.** بلاه
+        # `required_s=0` و`used=()` فكل حدّ بيرجّع صفرًا، والترجيح
+        # بيضل الدرجة القديمة حرفيًا — وصلة بتبيّن شغّالة وهي ما بتعمل
+        # شي. الفرق مقيس بفحص، مش مفترَضًا.
+        #
+        # **و`previous_ref` ما بتنمرّر هون بقصد.** مرّرتها أول مرة
+        # (`previous_ref=prev_ref`)، والفحص عبر المسار الحقيقي فشل:
+        # مكافأة الاستمرارية (+2.5) بتغلب عقوبتي التكرار والقُرب
+        # (−1.33)، فكل المقاطع بتاخد نفس الأصل — **العكس التام** من
+        # غرض الحدّين.
+        #
+        # والخلل مش بالأوزان، بالمعنى: الاستمرارية قرار **خطّة**
+        # (`ShotProposal.continuity`)، والـResolver ما بيشوف خطة. فهو
+        # ما بيقدر يعرف إذا كانت مطلوبة، ومرّرها يعني «مطلوبة دايمًا».
+        # الاستمرارية **داخل** الأصل شي تاني وبمكانها: `in_point_for`
+        # تحت بتاخد `after` وبتكمّل النافذة.
+        e = choose(catalog, want, required_s=need, used=used)
         p = verify(e, root, need, want.segment_id)
         after = prev_end if e.provider_ref == prev_ref else None
         start = in_point_for(e, need, after)
@@ -286,6 +335,7 @@ def resolve_assets(intent: AssetIntent, required: Mapping[int, float],
             sha256=e.sha256, license=e.license, attribution=e.attribution,
             probe=e.probe, in_point=start)
         prev_ref, prev_end = e.provider_ref, start + need
+        used.append(e.provider_ref)
     return out
 
 
